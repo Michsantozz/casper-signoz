@@ -133,6 +133,32 @@ Unit tests are hermetic (external services mocked). Live/E2E flows are opt-in (`
 
 ---
 
+## 📊 Observability (SigNoz)
+
+CasperAgent is instrumented **OpenTelemetry-native** — every agent run, tool
+call, LLM generation, RAG hop, and Inngest workflow emits a span, exported over
+OTLP (`http/protobuf`) to **SigNoz**. No proprietary SDK: the app speaks
+standard OTel; SigNoz is just an OTLP sink (it runs alongside Langfuse + PG).
+
+- **Agent & LLM tracing** — spans carry the `gen_ai.*` semantic conventions
+  (`gen_ai.request.model`, `gen_ai.usage.input_tokens/output_tokens`, cache
+  reads) plus a `mastra.span.type` discriminator, so token usage, latency, and
+  cost are queryable per model and per tool.
+- **Self-instrumented token telemetry** — the Mastra→OTLP path drops token
+  usage on the streaming path (two upstream gaps, diagnosed against the running
+  stack); `src/mastra/llm-telemetry.ts` wraps every model with a dedicated OTel
+  tracer that emits real (not estimated) `gen_ai.usage.*` + latency spans.
+- **Versioned dashboard + alerts** — a 10-panel agent/LLM dashboard
+  ([`deploy/signoz/dashboards/`](deploy/signoz/dashboards/)) and 3 threshold
+  alert rules ([`deploy/signoz/alerts/`](deploy/signoz/alerts/)) ship as code.
+- **Reproducible deploy** — a SigNoz Foundry casting spec
+  ([`deploy/signoz/casting.yaml`](deploy/signoz/casting.yaml) + `.lock`) so the
+  exact SigNoz stack (server + MCP) can be re-created with one command.
+
+**→ Full observability guide, setup, and verification: [`SIGNOZ.md`](SIGNOZ.md).**
+
+---
+
 ## 🧩 Architecture
 
 Feature-based (FSD-flavored), colocated with the App Router, with layer boundaries **enforced by ESLint** (`eslint-plugin-boundaries` — a violating import fails `pnpm lint`). Next's `app/` files are thin shells that re-export the real logic from `_pages/` (page composition) and `_app/api-routes/` (route handlers). One unidirectional import flow: `app → _pages/_app → features/mastra → server/shared`, never the reverse.

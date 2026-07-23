@@ -58,6 +58,45 @@ host conflict):
 
 > Needs ~4GB RAM allocated to Docker. Containers healthy in ~1 min.
 
+### ⚠️ Enable the v2 dashboard renderer (required)
+
+The versioned dashboard uses the **v2 (Perses) schema** (`schemaVersion: v6`).
+On current SigNoz builds the v2 dashboard renderer is behind an experimental,
+**default-off** feature flag (`use_dashboard_v2`). Without it the UI silently
+falls back to the legacy renderer and shows an empty "Welcome to your new
+dashboard" even though the panels exist in the API. Turn it on for the SigNoz
+service (env → `flagger.config.boolean.use_dashboard_v2`):
+
+```yaml
+# pours/deployment/compose.yaml, service signoz-signoz-0, under environment:
+- SIGNOZ_FLAGGER_CONFIG_BOOLEAN_USE__DASHBOARD__V2=true
+```
+
+```bash
+docker compose up -d signoz-signoz-0   # recreate to pick up the flag
+```
+
+(The `__` in the env key is a literal underscore in the flag name, per SigNoz's
+env-var convention; single `_` separates config levels.)
+
+## Import the dashboard + alerts
+
+Everything is versioned as code and pushed over the REST API with a
+service-account key (`SIGNOZ-API-KEY` header).
+
+1. **Create a service account key** (once, as an admin) — SigNoz UI →
+   *Settings → Service Accounts* → create account (editor role) → create key.
+   Or via API: `POST /api/v1/service_accounts` → `POST /api/v1/service_accounts/{id}/keys`.
+2. **Push the dashboard** — `POST /api/v2/dashboards` with the versioned JSON
+   ([`deploy/signoz/dashboards/agent-llm-observability.json`](deploy/signoz/dashboards/agent-llm-observability.json)).
+   The body is `{ schemaVersion, name (RFC-1123 slug), tags:[{key,value}], spec }`
+   — the JSON's `spec` (display, variables, panels, layouts) is used as-is.
+3. **Push the alert rules** — `POST /api/v2/rules` per file under
+   [`deploy/signoz/alerts/`](deploy/signoz/alerts/); `POST /api/v2/rules/test`
+   dry-runs one before saving.
+
+Panels populate once `gen_ai.*` traces are ingested (drive the agent first).
+
 ## Verify traces land
 
 ```bash
@@ -70,4 +109,6 @@ Service name is `casper-assistant` (set in `observability.ts`).
 
 ## Reference
 
-Local clone of the SigNoz repo for code/docs lookups: `/home/michsantoz/signoz-ref`.
+SigNoz OSS source (for query-builder / API schema lookups):
+<https://github.com/SigNoz/signoz>. MCP server:
+<https://signoz.io/docs/ai/signoz-mcp-server/>.
