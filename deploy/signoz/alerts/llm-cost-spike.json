@@ -14,9 +14,17 @@
             "signal": "traces",
             "stepInterval": 60,
             "disabled": true,
-            "filter": { "expression": "mastra.span.type = 'model_generation'" },
-            "having": { "expression": "" },
-            "aggregations": [{ "expression": "sum(gen_ai.usage.input_tokens)" }]
+            "filter": {
+              "expression": "mastra.span.type = 'model_generation'"
+            },
+            "having": {
+              "expression": ""
+            },
+            "aggregations": [
+              {
+                "expression": "sum(gen_ai.usage.input_tokens)"
+              }
+            ]
           }
         },
         {
@@ -26,9 +34,17 @@
             "signal": "traces",
             "stepInterval": 60,
             "disabled": true,
-            "filter": { "expression": "mastra.span.type = 'model_generation'" },
-            "having": { "expression": "" },
-            "aggregations": [{ "expression": "sum(gen_ai.usage.output_tokens)" }]
+            "filter": {
+              "expression": "mastra.span.type = 'model_generation'"
+            },
+            "having": {
+              "expression": ""
+            },
+            "aggregations": [
+              {
+                "expression": "sum(gen_ai.usage.output_tokens)"
+              }
+            ]
           }
         },
         {
@@ -53,23 +69,39 @@
           "name": "critical",
           "target": 5,
           "matchType": "at_least_once",
-          "op": "above"
+          "op": "above",
+          "channels": [
+            "casper-default"
+          ]
         }
       ]
     }
   },
-  "labels": { "severity": "warning", "component": "llm", "kind": "cost" },
+  "labels": {
+    "severity": "warning",
+    "component": "llm",
+    "kind": "cost"
+  },
   "annotations": {
     "summary": "Estimated LLM cost above ${{$threshold}} in window",
     "description": "Derived spend reached ${{$value}} over the evaluation window."
   },
   "evaluation": {
     "kind": "rolling",
-    "spec": { "evalWindow": "5m", "frequency": "1m" }
+    "spec": {
+      "evalWindow": "5m",
+      "frequency": "1m"
+    }
   },
   "notificationSettings": {
     "groupBy": [],
-    "renotify": { "enabled": true, "interval": "2h", "alertStates": ["firing"] },
+    "renotify": {
+      "enabled": true,
+      "interval": "2h",
+      "alertStates": [
+        "firing"
+      ]
+    },
     "usePolicy": false
   },
   "disabled": false

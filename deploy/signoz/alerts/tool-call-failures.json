@@ -14,13 +14,25 @@
             "signal": "traces",
             "stepInterval": 60,
             "disabled": false,
-            "filter": { "expression": "mastra.span.type = 'tool_call' AND error.type EXISTS" },
+            "filter": {
+              "expression": "mastra.span.type = 'tool_call' AND error.type EXISTS"
+            },
             "groupBy": [
-              { "name": "gen_ai.tool.name", "fieldDataType": "string", "fieldContext": "tag" }
+              {
+                "name": "gen_ai.tool.name",
+                "fieldDataType": "string",
+                "fieldContext": "tag"
+              }
             ],
             "legend": "{{gen_ai.tool.name}}",
-            "having": { "expression": "" },
-            "aggregations": [{ "expression": "count()" }]
+            "having": {
+              "expression": ""
+            },
+            "aggregations": [
+              {
+                "expression": "count()"
+              }
+            ]
           }
         }
       ],
@@ -36,23 +48,40 @@
           "name": "critical",
           "target": 5,
           "matchType": "at_least_once",
-          "op": "above"
+          "op": "above",
+          "channels": [
+            "casper-default"
+          ]
         }
       ]
     }
   },
-  "labels": { "severity": "critical", "component": "agent-tools" },
+  "labels": {
+    "severity": "critical",
+    "component": "agent-tools"
+  },
   "annotations": {
     "summary": "Tool call failures above {{$threshold}} in window",
     "description": "{{$value}} failing tool_call spans observed."
   },
   "evaluation": {
     "kind": "rolling",
-    "spec": { "evalWindow": "5m", "frequency": "1m" }
+    "spec": {
+      "evalWindow": "5m",
+      "frequency": "1m"
+    }
   },
   "notificationSettings": {
-    "groupBy": ["gen_ai.tool.name"],
-    "renotify": { "enabled": true, "interval": "1h", "alertStates": ["firing"] },
+    "groupBy": [
+      "gen_ai.tool.name"
+    ],
+    "renotify": {
+      "enabled": true,
+      "interval": "1h",
+      "alertStates": [
+        "firing"
+      ]
+    },
     "usePolicy": false
   },
   "disabled": false

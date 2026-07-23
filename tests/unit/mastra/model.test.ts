@@ -148,10 +148,13 @@ describe("resilientFetch", () => {
 });
 
 describe("provider dispatch", () => {
-  it("createModel defaults to Fireworks (magic-string config)", async () => {
+  it("createModel defaults to Fireworks via the OpenAI-compatible endpoint", async () => {
     const { createModel } = await importModel();
-    const m = createModel() as { id: string };
-    expect(m.id).toMatch(/^fireworks-ai\//);
+    createModel();
+    expect(createOpenAI).toHaveBeenCalledWith(
+      expect.objectContaining({ baseURL: expect.stringContaining("fireworks.ai") }),
+    );
+    expect(chat).toHaveBeenCalled();
   });
 
   it("createModel honors MODEL_PROVIDER=bedrock", async () => {

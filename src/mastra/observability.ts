@@ -51,8 +51,14 @@ export function createObservability(): Observability {
     );
   }
 
-  // Ship the same agent spans (tool calls, LLM generations, RAG, workflows)
-  // + token/cost/latency metrics to SigNoz over OTLP. Two modes, env-toggled:
+  // Ship agent spans (tool calls, LLM generations, RAG, workflows) + Mastra log
+  // events to SigNoz over OTLP. NOTE: the OtelExporter forwards only the TRACES
+  // and LOGS signals — it implements `_exportTracingEvent` + `onLogEvent`, but
+  // NOT `onMetricEvent`, so the auto-extracted token/cost/latency *metrics* stay
+  // in PG (via MastraStorageExporter) and do NOT travel over OTLP. Those same
+  // numbers still reach SigNoz as span attributes (`gen_ai.usage.*`, span
+  // durations), so cost/latency dashboards are built there from traces, not from
+  // a metrics pipeline. Two modes, env-toggled:
   //   - Self-host: SIGNOZ_ENDPOINT set (e.g. http://localhost:4318/v1/traces)
   //     and NO api key → OTLP `custom` provider, no ingestion header. This is
   //     the local docker path; the built-in `signoz` provider can't be used
@@ -77,19 +83,24 @@ export function createObservability(): Observability {
             }
           : {
               custom: {
-                // self-host OTLP HTTP ingest. http/json uses
-                // @opentelemetry/exporter-trace-otlp-http (already a dep); the
-                // http/protobuf path needs the -proto exporters which aren't
-                // installed, so json is the working default here.
+                // Self-host OTLP HTTP ingest. http/protobuf is SigNoz's
+                // recommended protocol; the exporter uses
+                // @opentelemetry/exporter-trace-otlp-proto (traces) and
+                // -logs-otlp-proto (logs), both installed deps. The base
+                // endpoint (…/v1/traces) is reused for logs — the exporter
+                // derives …/v1/logs by swapping the signal-path suffix.
                 endpoint: process.env.SIGNOZ_ENDPOINT!,
-                protocol: "http/json",
+                protocol: "http/protobuf",
               },
             },
-        // Traces only. The OTLP *logs* exporters (-logs-otlp-http/-proto) are
-        // not installed; leaving logs enabled just spams "exporter not
-        // installed" on every boot. Enable + add the dep if log export is
-        // wanted later.
-        signals: { traces: true, logs: false },
+        // Traces + logs. When a log carries traceId/spanId, the OtelExporter
+        // populates native trace context so SigNoz correlates logs to traces.
+        signals: { traces: true, logs: true },
+        // Diagnostic: SIGNOZ_DEBUG=1 surfaces per-span convert/export decisions
+        // (which span types are skipped/dropped). Off by default.
+        ...(process.env.SIGNOZ_DEBUG
+          ? { logLevel: "debug" as const }
+          : {}),
       }),
     );
   }

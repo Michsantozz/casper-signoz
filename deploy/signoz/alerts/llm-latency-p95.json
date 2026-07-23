@@ -14,9 +14,17 @@
             "signal": "traces",
             "stepInterval": 60,
             "disabled": false,
-            "filter": { "expression": "mastra.span.type = 'model_generation'" },
-            "having": { "expression": "" },
-            "aggregations": [{ "expression": "p95(duration_nano)" }]
+            "filter": {
+              "expression": "mastra.span.type = 'model_generation'"
+            },
+            "having": {
+              "expression": ""
+            },
+            "aggregations": [
+              {
+                "expression": "p95(duration_nano)"
+              }
+            ]
           }
         }
       ],
@@ -33,23 +41,40 @@
           "target": 30000000000,
           "targetUnit": "ns",
           "matchType": "at_least_once",
-          "op": "above"
+          "op": "above",
+          "channels": [
+            "casper-default"
+          ]
         }
       ]
     }
   },
-  "labels": { "severity": "critical", "component": "llm" },
+  "labels": {
+    "severity": "critical",
+    "component": "llm"
+  },
   "annotations": {
     "summary": "LLM p95 latency above threshold ({{$threshold}} ns)",
     "description": "p95 model_generation latency reached {{$value}} ns."
   },
   "evaluation": {
     "kind": "rolling",
-    "spec": { "evalWindow": "5m", "frequency": "1m" }
+    "spec": {
+      "evalWindow": "5m",
+      "frequency": "1m"
+    }
   },
   "notificationSettings": {
-    "groupBy": ["gen_ai.request.model"],
-    "renotify": { "enabled": true, "interval": "1h", "alertStates": ["firing"] },
+    "groupBy": [
+      "gen_ai.request.model"
+    ],
+    "renotify": {
+      "enabled": true,
+      "interval": "1h",
+      "alertStates": [
+        "firing"
+      ]
+    },
     "usePolicy": false
   },
   "disabled": false

@@ -67,11 +67,14 @@ const togglesSchema = z.object({
   LANGFUSE_PUBLIC_KEY: z.string().optional(),
   LANGFUSE_SECRET_KEY: z.string().optional(),
   LANGFUSE_BASE_URL: z.url().optional(),
-  // SigNoz observability export (OpenTelemetry-native). Ships the same agent
-  // traces + token/cost/latency spans Mastra emits, via OTLP, to a SigNoz
-  // instance. Optional and independent of Langfuse (both can run at once):
+  // SigNoz observability export (OpenTelemetry-native). Ships the agent traces
+  // (with token/cost/latency as `gen_ai.usage.*` span attributes) + Mastra log
+  // events, via OTLP, to a SigNoz instance. NOTE: metrics are NOT sent over OTLP
+  // — the OtelExporter forwards only traces + logs, so cost/latency dashboards
+  // in SigNoz are derived from span attributes. Optional and independent of
+  // Langfuse (both can run at once):
   //   - Self-host: set SIGNOZ_ENDPOINT (e.g. http://localhost:4318/v1/traces),
-  //     no key needed → OtelExporter uses the OTLP `custom` provider.
+  //     no key needed → OtelExporter uses the OTLP `custom` provider (proto).
   //   - Cloud: set SIGNOZ_API_KEY (+ optional SIGNOZ_REGION) → `signoz` provider
   //     (the built-in provider REQUIRES the ingestion key, hence the split).
   // See mastra/observability.ts.
