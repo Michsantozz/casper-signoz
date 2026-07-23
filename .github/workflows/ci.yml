@@ -46,7 +46,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: pnpm/action-setup@v4 # respeita packageManager: pnpm@11.0.9
+      - uses: pnpm/action-setup@v6 # respeita packageManager: pnpm@11.0.9
 
       - uses: actions/setup-node@v4
         with:
@@ -101,7 +101,7 @@ jobs:
           # Histórico completo: o gitleaks varre todos os commits, não só o HEAD.
           fetch-depth: 0
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v4
         with:
           node-version: 24
