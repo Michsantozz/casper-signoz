@@ -81,6 +81,21 @@ const togglesSchema = z.object({
   SIGNOZ_ENDPOINT: z.string().optional(),
   SIGNOZ_API_KEY: z.string().optional(),
   SIGNOZ_REGION: z.enum(["us", "eu", "in"]).optional(),
+  // SigNoz MCP client (the SRE-copilot: the agent queries its OWN telemetry).
+  // Independent of the OTLP export vars above — those SEND traces to SigNoz;
+  // these let the sreAgent READ them back via the SigNoz MCP server
+  // (signoz/signoz-mcp-server). All-or-nothing: without SIGNOZ_MCP_URL the MCP
+  // client registers no server and the sreAgent has no tools (safe no-op).
+  //   - SIGNOZ_MCP_URL: the MCP server endpoint (HTTP), e.g.
+  //     http://localhost:8000/mcp (self-host) — TRANSPORT_MODE=http.
+  //   - SIGNOZ_MCP_API_KEY: a SigNoz service-account key (`SIGNOZ-API-KEY`
+  //     header) the MCP server uses to query the SigNoz instance.
+  //   - SIGNOZ_INSTANCE_URL: which SigNoz instance to query (`X-SigNoz-URL`
+  //     header), e.g. http://localhost:8090. Optional if the MCP server has
+  //     SIGNOZ_URL baked in.
+  SIGNOZ_MCP_URL: z.string().optional(),
+  SIGNOZ_MCP_API_KEY: z.string().optional(),
+  SIGNOZ_INSTANCE_URL: z.string().optional(),
   // Sentry error tracking — grouping + alerting for the cron/webhook/enrich
   // paths that today only console.error into stdout. Optional: absent → the SDK
   // is never initialized (pure no-op, see sentry.server.config.ts). Set the DSN

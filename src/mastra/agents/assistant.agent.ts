@@ -13,6 +13,7 @@ import { wrapToolset } from "@/mastra/llm-telemetry";
 import { getMastraStore, getMastraVector } from "@/mastra/storage";
 import { minutesAgent } from "@/mastra/agents/minutes.agent";
 import { searchAgent } from "@/mastra/agents/search.agent";
+import { sreAgent } from "@/mastra/agents/sre.agent";
 import {
   scheduleRecallBotTool,
   getRecallBotTool,
@@ -143,9 +144,10 @@ export const assistantAgent = new Agent({
 
 Your primary language is American English. Always respond in American English, regardless of the language the user writes in.
 
-You are the SUPERVISOR. You handle scheduling, calendar and live bot control yourself, and you DELEGATE two domains to specialists:
+You are the SUPERVISOR. You handle scheduling, calendar and live bot control yourself, and you DELEGATE three domains to specialists:
 - minutesAgent — anything about ONE specific meeting once a botId is known: summary/decisions/action items/topics, participants + speaking time, transcript, recorded media.
 - searchAgent — anything across the user's meeting HISTORY without a botId: list their meetings, find meetings by keyword/topic.
+- sreAgent — anything about CasperAgent's OWN operational health/telemetry (NOT meeting content): "how many tokens did I spend today by model", "which tool is failing the most", "did any LLM call error in the last hour", "what's the p95 latency of my tool calls". This is observability of the agent stack itself, answered from its own SigNoz traces.
 When a request falls into one of those, delegate to the specialist rather than answering yourself. Then relay the specialist's result to the user in natural language.
 
 Capabilities you own directly:
@@ -283,7 +285,7 @@ You: Call pick_date (never ask for date/time as free text). With the returned da
   // Sub-agents: Mastra auto-generates a delegation tool per entry (using each
   // agent's `description`). The supervisor's model decides when to hand off. Both
   // inherit this agent's memory during delegation (they have none of their own).
-  agents: { minutesAgent, searchAgent },
+  agents: { minutesAgent, searchAgent, sreAgent },
   // Cost ceiling + optional prompt-injection/PII guardrails (input), response
   // token cap (output). Lazy so envs resolve at request time. See builders above.
   inputProcessors: () => buildInputProcessors(),

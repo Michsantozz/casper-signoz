@@ -97,6 +97,48 @@ service-account key (`SIGNOZ-API-KEY` header).
 
 Panels populate once `gen_ai.*` traces are ingested (drive the agent first).
 
+## Real LLM cost (not a placeholder)
+
+The dashboard cost panels read `gen_ai.usage.cost` — a real $ figure the app
+computes per span from token counts, not an estimate. Set both prices (per 1M
+tokens) so every model_generation span carries its cost:
+
+```bash
+# Kimi K2.7 Code on Fireworks (the default model). Adjust per your model.
+LLM_PRICE_INPUT_PER_MTOK=0.95
+LLM_PRICE_OUTPUT_PER_MTOK=4.00
+```
+
+Absent → the cost field is simply empty (no fabricated number). See
+`src/mastra/llm-telemetry.ts` (`pricePerToken`). Note: SigNoz's own native
+per-span cost processor (`signozllmpricing`, `_signoz.gen_ai.total_cost`) is
+**EE/Cloud-only** — it is not in the OSS collector image, so on self-host OSS the
+app-side computation above is the way to get real cost.
+
+## SRE-copilot — the agent queries its own telemetry
+
+The app ships an `sreAgent` (registered in `src/mastra/index.ts`, delegated to by
+the supervisor) that reads CasperAgent's OWN traces back out of SigNoz via the
+**SigNoz MCP server** — so you can ask, in the app's home chat, "which tool is
+failing the most", "how much did I spend on LLM calls today", "did any LLM call
+error in the last hour", and it answers from live telemetry.
+
+Wiring (all no-op if unset — see `.env.example`):
+
+```bash
+SIGNOZ_MCP_URL=http://signoz-mcp:8000/mcp     # the MCP server (HTTP transport)
+SIGNOZ_MCP_API_KEY=<signoz-service-account-key>
+SIGNOZ_INSTANCE_URL=http://signoz-signoz-0:8080
+```
+
+Network: the app container must share the SigNoz stack's network to reach both
+the OTLP ingester and the MCP server by container name. `docker-compose.override.yml`
+joins the app to `signoz-network` (declared `external` — bring SigNoz up first).
+The app talks to the MCP over the internal network by container name, so the MCP's
+host port binding is irrelevant (remove it from the generated compose if `:8000`
+collides on the host). Files: `src/mastra/mcp-signoz.ts` (client),
+`src/mastra/agents/sre.agent.ts` (agent).
+
 ## Verify traces land
 
 ```bash

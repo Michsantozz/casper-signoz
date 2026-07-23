@@ -19,6 +19,13 @@ services:
     # which would keep the base 3000:3000 and collide with evolution_frontend).
     ports: !override
       - "3009:3000"
+    # Join the SigNoz stack's network so the app can (a) export OTLP traces to
+    # signoz-ingester-1:4318 and (b) reach the SigNoz MCP server (signoz-mcp:8000)
+    # for the SRE-copilot. signoz-network is created by the Foundry SigNoz deploy
+    # (see SIGNOZ.md); declared external so this compose doesn't own it.
+    networks:
+      - default
+      - signoz-network
 
   inngest:
     # `inngest start` (prod) não autodescobre como o dev. Precisa do --sdk-url
@@ -41,3 +48,10 @@ services:
     depends_on:
       app:
         condition: service_healthy
+
+networks:
+  # Created by the Foundry SigNoz deployment (deploy/signoz/casting.yaml). The
+  # app joins it (above) to export OTLP + reach the SigNoz MCP server. `external`
+  # means this compose expects it to already exist — bring SigNoz up first.
+  signoz-network:
+    external: true

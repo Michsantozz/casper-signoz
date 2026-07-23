@@ -123,7 +123,11 @@ export async function POST(req: Request) {
   // `assistantAgent` is the default (home chat = the supervisor); the meeting
   // notebook asks for `minutesAgent` (the meeting specialist, talked to
   // directly). Anything else falls back to the supervisor.
-  const AGENT_ALLOWLIST = ["assistantAgent", "minutesAgent"] as const;
+  const AGENT_ALLOWLIST = [
+    "assistantAgent",
+    "minutesAgent",
+    "sreAgent",
+  ] as const;
   const agentId = AGENT_ALLOWLIST.includes(
     requestedAgentId as (typeof AGENT_ALLOWLIST)[number],
   )
