@@ -1,0 +1,163 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# Least-privilege: o GITHUB_TOKEN só lê o repo. Qualquer scope não listado vira
+# `none`. CI não publica nada — não precisa de write. (security-hardening docs)
+permissions:
+  contents: read
+
+jobs:
+  # Gate de qualidade: typecheck + lint (boundary rules) + testes que rodam
+  # sem serviços externos. integration/e2e ficam de fora (precisam DB/APIs reais).
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20 # backstop: sem isto um job travado roda até 6h (default)
+    # Postgres real pro subconjunto de integração que valida SQL/constraints/
+    # concorrência (SKIP LOCKED, advisory lock, FKs, unique index). Sem ele esses
+    # testes ficam gated atrás de RUN_LIVE_E2E e nunca rodam no CI. postgres:17
+    # espelha docker-compose.dev.
+    services:
+      postgres:
+        # pgvector/pgvector:pg17 espelha o db de compose (Postgres 17 + extensão
+        # `vector`): migrations que criam índices vector rodam igual no CI.
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: casper
+          POSTGRES_PASSWORD: casper
+          POSTGRES_DB: casperagent
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U casper -d casperagent"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://casper:casper@localhost:5432/casperagent
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4 # respeita packageManager: pnpm@11.0.9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24 # engines.node >= 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pnpm test:unit
+      - run: pnpm test:component
+      # Aplica as migrations no Postgres do service antes da integração — os
+      # testes live-gated (constraints/concorrência) exigem o schema real.
+      - run: pnpm db:migrate
+      # RUN_LIVE_E2E=1 destrava os testes que provam garantias server-side contra
+      # o Postgres real (SKIP LOCKED, advisory-lock dedup de bot, FKs cascade/
+      # set-null, unique index). Os testes herméticos (disponibilidade) rodam
+      # igual. Sem esta flag o project ficava órfão e regressões passavam batidas.
+      - run: pnpm test:integration
+        env:
+          RUN_LIVE_E2E: "1"
+
+      # Valida o build de produção (RSC/bundler/boundaries) — o typecheck sozinho
+      # não pega erros de bundling. Cacheia .next/cache entre runs pra acelerar.
+      - uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.next/cache
+          key: next-${{ github.sha }}
+          restore-keys: next-
+      - run: pnpm build
+        env:
+          NEXT_TELEMETRY_DISABLED: "1"
+          # Build exige a chave (mesma lógica do Dockerfile). Placeholder de CI:
+          # o build só valida o bundle, não roda Server Actions reais.
+          NEXT_SERVER_ACTIONS_ENCRYPTION_KEY: ci-placeholder-not-a-real-secret
+          GIT_HASH: ${{ github.sha }}
+      # Impede que barrels/client boundaries voltem a acoplar UIs pesadas entre
+      # rotas. Lê a métrica oficial emitida pelo build anterior por rota.
+      - run: pnpm bundle:check
+
+  # Gates AppSec (audit fix #9): auditoria de dependências, secret scanning e
+  # SAST. Roda em paralelo ao verify — não bloqueia o feedback de qualidade, mas
+  # falha o CI se introduzir vuln alta/crítica, segredo versionado ou padrão
+  # inseguro conhecido. Sem isto, segredos e libs vulneráveis chegavam à main.
+  security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Histórico completo: o gitleaks varre todos os commits, não só o HEAD.
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      # Vulnerabilidades em dependências de produção (alta/crítica falham).
+      - name: pnpm audit (prod, high+)
+        run: pnpm audit --prod --audit-level high
+
+      # Secret scanning (config em .gitleaks.toml; fixtures de teste allowlisted).
+      - name: Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: .gitleaks.toml
+
+      # SAST: regras da comunidade + auto-config por linguagem. Falha em findings
+      # de severidade de erro; não bloqueia em warnings.
+      - name: Semgrep
+        uses: semgrep/semgrep-action@v1
+        with:
+          config: p/ci
+
+  # Valida que a imagem de produção builda (standalone, multi-stage). Não publica.
+  docker:
+    runs-on: ubuntu-latest
+    needs: verify
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: casperagent:ci
+          cache-from: type=gha
+          # gha cache exige write no escopo `actions`, que o GITHUB_TOKEN de PRs
+          # do Dependabot não tem (read-only forçado). Só grava em push (main);
+          # em PR só lê (cache-from não precisa de write). Evita falha no setup.
+          cache-to: ${{ github.event_name == 'push' && 'type=gha,mode=max' || '' }}
+          build-args: |
+            NEXT_SERVER_ACTIONS_ENCRYPTION_KEY=ci-placeholder-not-a-real-secret
+            GIT_HASH=${{ github.sha }}
+
+      # Análise de vulnerabilidades da imagem construída (OS + libs). Falha em
+      # CRITICAL/HIGH com fix disponível; ignora unfixed pra não travar por vuln
+      # sem patch upstream. (audit fix #9)
+      - name: Trivy image scan
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: casperagent:ci
+          format: table
+          exit-code: "1"
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true

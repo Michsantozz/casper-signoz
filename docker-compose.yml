@@ -1,0 +1,312 @@
+# CasperAgent — stack de produção self-host.
+#   db      — Postgres (better-auth, Mastra memory, drizzle).
+#   migrate — roda as migrations e sai (job one-shot; app espera terminar).
+#   inngest — servidor Inngest: descobre /api/inngest e dispara o cron autônomo.
+#   app     — Next.js standalone (server.js).
+#
+# Uso:
+#   cp .env.example .env   # e preencha os [SECRET]
+#   docker compose up -d --build
+#
+# Secrets vêm do .env (env_file). Em prod real, prefira Docker/K8s secrets.
+
+name: casperagent
+
+# Log rotation compartilhado — sem isto os logs json-file crescem infinito e
+# enchem o disco do host (failure mode clássico de self-host). `max-file` só
+# tem efeito se `max-size` estiver setado (doc do driver json-file).
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  db:
+    # pgvector/pgvector:pg17 = Postgres 17 com a extensão `vector` já compilada.
+    # Mastra semantic recall (memória por similaridade de embeddings) precisa dela;
+    # a imagem oficial postgres:17-alpine NÃO traz pgvector e o recall degrada.
+    image: pgvector/pgvector:pg17
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      POSTGRES_USER: casper
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: casperagent
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # Postgres é o gargalo do stack — folga maior. read_only NÃO (escreve no
+    # datadir + sockets em /var/run). cap_drop ALL também NÃO: o entrypoint
+    # oficial roda como root, faz chmod no datadir e su-exec pro user postgres —
+    # dropar todas as caps mata o boot ("chmod: Operation not permitted").
+    # Testado: só no-new-privileges é compatível (accepting connections).
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 512M
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U casper -d casperagent"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Job one-shot: aplica migrations e encerra. App só sobe depois deste completar.
+  migrate:
+    build:
+      context: .
+      target: builder
+    logging: *default-logging
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://casper:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/casperagent
+    command: ["pnpm", "db:migrate"]
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  # Job one-shot: dá LOGIN + senha à role NÃO-owner `app_user` (a 0020 só a cria
+  # NOLOGIN e concede os GRANTs; a credencial de runtime vem daqui, do .env, para
+  # não versionar senha). Roda DEPOIS do migrate (a role e os grants já existem)
+  # e ANTES do app subir. Idempotente: reexecutar só re-seta a senha.
+  app-db-init:
+    image: postgres:17-alpine
+    logging: *default-logging
+    environment:
+      # Conecta como owner/superuser só para o ALTER ROLE (o app NUNCA usa isto).
+      PGPASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?set APP_DB_PASSWORD in .env (senha da role app_user)}
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        psql -h db -U casper -d casperagent -v ON_ERROR_STOP=1 \
+          -c "ALTER ROLE app_user WITH LOGIN PASSWORD '$$APP_DB_PASSWORD';"
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    restart: "no"
+
+  # MinIO: object storage S3-compatível (uploads de imagem/attachments do chat).
+  # console em :9001, API S3 em :9000. Bucket criado pelo job `minio-init`.
+  minio:
+    # Tag pinada (não `latest`) — reprodutibilidade entre deploys. Atualize
+    # conscientemente. RELEASE.2025-04-08 é uma release estável recente.
+    image: minio/minio:RELEASE.2025-04-08T15-41-24Z
+    restart: unless-stopped
+    logging: *default-logging
+    command: ["server", "/data", "--console-address", ":9001"]
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?set MINIO_ROOT_USER in .env}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD in .env}
+    # Host ports offset to 92xx: 9000/9001 are commonly taken by another local
+    # MinIO. Container stays on 9000/9001 internally (compose network + init use
+    # those); only the host mapping is shifted.
+    #
+    # Least privilege (fix #8): bind to 127.0.0.1 so the S3 API and the admin
+    # CONSOLE are reachable only from the host loopback, never the LAN/public
+    # interface. The app talks to MinIO over the internal compose network
+    # (http://minio:9000), not these host ports. In prod, drop the console
+    # mapping (9201) entirely — set MINIO_CONSOLE_BIND to an unused value or
+    # remove the line. The S3 host port (9200) is needed for presigned GETs the
+    # browser/provider fetch via S3_PUBLIC_URL.
+    ports:
+      - "${MINIO_API_BIND:-127.0.0.1:9200}:9000"
+      - "${MINIO_CONSOLE_BIND:-127.0.0.1:9201}:9001"
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Job one-shot: cria o bucket PRIVADO (sem leitura anônima) e uma SERVICE
+  # ACCOUNT escopada só a esse bucket, que é a credencial S3 do app. Gravações
+  # são servidas por proxy autenticado (/api/meeting-video); anexos para o modelo
+  # de visão usam presigned GET de vida curta (/api/upload). Uma URL vazada não
+  # dá acesso permanente fora da sessão/RLS. Ver audit fix #3 + #8.
+  #
+  # Least privilege (fix #8): o app NÃO usa mais as credenciais root do MinIO —
+  # um comprometimento do app não dá controle administrativo do storage, só
+  # leitura/escrita no bucket de uploads. As creds da service account vêm do
+  # .env (S3_ACCESS_KEY_ID/S3_SECRET_ACCESS_KEY) e são atribuídas aqui.
+  minio-init:
+    image: minio/mc:RELEASE.2025-04-08T15-39-49Z
+    logging: *default-logging
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?set MINIO_ROOT_USER in .env}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD in .env}
+      S3_BUCKET: ${S3_BUCKET:-casper-uploads}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:?set S3_ACCESS_KEY_ID in .env (service account do app)}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:?set S3_SECRET_ACCESS_KEY in .env (service account do app)}
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD"
+        mc mb --ignore-existing local/"$$S3_BUCKET"
+        mc anonymous set none local/"$$S3_BUCKET"
+        # Policy escopada: só ações de objeto/listagem NESTE bucket.
+        cat > /tmp/app-policy.json <<EOF
+        {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+              "Resource": ["arn:aws:s3:::$$S3_BUCKET/*"]
+            },
+            {
+              "Effect": "Allow",
+              "Action": ["s3:ListBucket", "s3:GetBucketLocation"],
+              "Resource": ["arn:aws:s3:::$$S3_BUCKET"]
+            }
+          ]
+        }
+        EOF
+        mc admin policy create local casper-app-rw /tmp/app-policy.json || true
+        # Service account (idempotente): remove e recria com as creds do .env.
+        mc admin user svcacct rm local "$$S3_ACCESS_KEY_ID" || true
+        mc admin user svcacct add local "$$MINIO_ROOT_USER" \
+          --access-key "$$S3_ACCESS_KEY_ID" \
+          --secret-key "$$S3_SECRET_ACCESS_KEY" \
+          --policy /tmp/app-policy.json
+    restart: "no"
+
+  # Servidor Inngest: registra o endpoint /api/inngest do app e executa o cron
+  # do loop autônomo + workflows. Sem ele, o agente NÃO é autônomo.
+  inngest:
+    # Tag pinada (não `latest`). Atualize conscientemente ao subir versão.
+    image: inngest/inngest:v1.5.3
+    restart: unless-stopped
+    logging: *default-logging
+    command: ["inngest", "start"]
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    environment:
+      INNGEST_DEV: "0"
+      # `inngest start` (prod) authenticates apps with these. MUST match the keys
+      # the app/SDK uses below, or event delivery + step callbacks fail closed.
+      # Both are [SECRET] — supply via .env (see .env.example).
+      INNGEST_EVENT_KEY: ${INNGEST_EVENT_KEY:?set INNGEST_EVENT_KEY in .env}
+      INNGEST_SIGNING_KEY: ${INNGEST_SIGNING_KEY:?set INNGEST_SIGNING_KEY in .env}
+    ports:
+      - "8288:8288"
+    depends_on:
+      app:
+        condition: service_healthy
+
+  app:
+    build:
+      context: .
+      target: runner
+      args:
+        # Server Actions encryption key precisa estar presente no BUILD.
+        NEXT_SERVER_ACTIONS_ENCRYPTION_KEY: ${NEXT_SERVER_ACTIONS_ENCRYPTION_KEY}
+        GIT_HASH: ${GIT_HASH:-}
+    restart: unless-stopped
+    logging: *default-logging
+    # Next standalone + Mastra/LLM buffers. read_only NÃO — Next escreve em
+    # .next/cache em runtime. cap_drop ALL é seguro (server HTTP não precisa
+    # de cap privilegiada); non-root já vem do Dockerfile (USER node).
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 512M
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    env_file: .env
+    environment:
+      # RLS hardening: o app conecta como a role NÃO-owner `app_user` (sem
+      # BYPASSRLS, não-superuser) — só assim as policies FORCE ROW LEVEL SECURITY
+      # de fato isolam por app.user_id. O superuser `casper` fica restrito ao job
+      # de migrations (DDL) e ao app-db-init (ALTER ROLE). A role app_user recebe
+      # LOGIN + senha no job app-db-init (senha via APP_DB_PASSWORD no .env).
+      # Ver drizzle/0008 + 0020_rls_app_user_grants.sql.
+      DATABASE_URL: postgres://app_user:${APP_DB_PASSWORD:?set APP_DB_PASSWORD in .env}@db:5432/casperagent
+      # LLM guardrails (prompt-injection block + PII redact) on the chat agent.
+      # Off by default (LLM cost/latency); turn on for untrusted-input prod.
+      ENABLE_LLM_GUARDRAILS: ${ENABLE_LLM_GUARDRAILS:-false}
+      INNGEST_BASE_URL: http://inngest:8288
+      INNGEST_DEV: "0"
+      # Same keys as the inngest service — the SDK signs event sends + step
+      # callbacks with these. Mismatch/absence in prod (INNGEST_DEV=0) breaks the
+      # app<->inngest handshake. Supplied via .env (see .env.example).
+      INNGEST_EVENT_KEY: ${INNGEST_EVENT_KEY:?set INNGEST_EVENT_KEY in .env}
+      INNGEST_SIGNING_KEY: ${INNGEST_SIGNING_KEY:?set INNGEST_SIGNING_KEY in .env}
+      # Storage S3 (MinIO). Endpoint interno via rede do compose; a URL pública
+      # (S3_PUBLIC_URL) é o que vai no presigned GET servido ao browser/modelo.
+      # Least privilege (fix #8): o app usa a SERVICE ACCOUNT criada no minio-init
+      # (escopada só ao bucket), NÃO as credenciais root do MinIO.
+      S3_ENDPOINT: http://minio:9000
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_BUCKET: ${S3_BUCKET:-casper-uploads}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:?set S3_ACCESS_KEY_ID in .env}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:?set S3_SECRET_ACCESS_KEY in .env}
+      S3_PUBLIC_URL: ${S3_PUBLIC_URL:-http://localhost:9200/casper-uploads}
+      S3_FORCE_PATH_STYLE: "true"
+      # better-auth valida o header Origin em mutations (sign-out, sign-in) contra
+      # trustedOrigins. Em NODE_ENV=production a lista de origins de dev é vazia,
+      # então acessar o container publicado por http://localhost:3009 dá 403
+      # INVALID_ORIGIN no sign-out. Este CSV adiciona os origins locais aos
+      # confiáveis sem hardcodar host no código (src/features/auth/model/auth.ts
+      # lê AUTH_EXTRA_TRUSTED_ORIGINS). Sobrescreva via .env se a porta mudar.
+      AUTH_EXTRA_TRUSTED_ORIGINS: ${AUTH_EXTRA_TRUSTED_ORIGINS:-http://localhost:3009,http://localhost:3000}
+    ports:
+      - "3000:3000"
+    # Readiness real (pinga Postgres). Node inline — slim não garante curl/wget.
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://localhost:3000/api/health?ready=1').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      app-db-init:
+        condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
+
+volumes:
+  pgdata:
+  miniodata:

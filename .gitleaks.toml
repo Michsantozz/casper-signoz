@@ -1,0 +1,29 @@
+# Gitleaks config for CI secret scanning (audit fix #9).
+#
+# Extends the default ruleset (all built-in secret detectors stay on) and adds
+# an allowlist for KNOWN, NON-PRODUCTION test fixtures — webhook signature
+# secrets and OAuth/state values used only to exercise verification code. These
+# are deterministic test doubles, not real credentials; without the allowlist
+# they trip the scanner on every run (the two false positives the audit found).
+#
+# Keep this allowlist TIGHT: it is scoped to test paths only, so a real secret
+# committed under src/ or config still fails CI.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Non-production test fixtures (webhook/OAuth signature doubles)"
+paths = [
+  '''tests/unit/webhooks/.*\.test\.ts''',
+  '''tests/unit/recall/oauth-state\.test\.ts''',
+  '''tests/.*fixtures?/.*''',
+]
+# Common placeholder markers used across the example env + tests. A real leak
+# won't match these tokens.
+regexTarget = "match"
+regexes = [
+  '''ci-placeholder-not-a-real-secret''',
+  '''change-me[-a-z0-9]*''',
+  '''minioadmin''',
+]

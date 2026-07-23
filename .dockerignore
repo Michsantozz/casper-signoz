@@ -1,0 +1,52 @@
+# Build context minimal — só o que o build precisa. Reduz upload de contexto,
+# invalidação de cache de layer, e impede secrets/artefatos de vazarem na imagem.
+
+# Deps e build output (reinstalados/regerados dentro da imagem)
+node_modules
+.next
+out
+build
+dist
+
+# Secrets e ambiente (injetados em runtime via env/secret, NUNCA na imagem)
+.env
+.env.*
+!.env.example
+*.pem
+agent-secret.pem
+
+# Git e CI
+.git
+.github
+.gitignore
+
+# Ferramentas locais do Claude Code / scratch (não são código do app)
+.claude
+.agents
+.firecrawl
+.playwright-mcp
+zdocs
+docs
+CASPER_SDK.md
+skills-lock.json
+
+# Test artifacts
+test-results
+playwright-report
+tests
+coverage
+
+# Editor / OS
+.DS_Store
+.vscode
+.idea
+*.log
+
+# TS incremental cache
+*.tsbuildinfo
+next-env.d.ts
+
+# Docker meta (evita recursão do contexto)
+Dockerfile
+.dockerignore
+docker-compose*.yml

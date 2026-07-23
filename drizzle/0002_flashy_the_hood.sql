@@ -1,0 +1,1 @@
+ALTER TABLE "account" ADD COLUMN "granted_scopes" text;

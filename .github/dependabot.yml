@@ -1,0 +1,42 @@
+# Dependabot — PRs automáticos de atualização de dependências.
+# Cobre o app (pnpm), o Dockerfile e os workflows do GitHub Actions.
+# Docs: https://docs.github.com/code-security/dependabot/dependabot-version-updates
+version: 2
+updates:
+  # Dependências do app (pnpm — lockfile na raiz).
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    # Agrupa patch/minor num único PR pra reduzir ruído; major fica separado
+    # (breaking → precisa revisão manual). Dev-deps agrupadas à parte.
+    groups:
+      prod-minor-patch:
+        dependency-type: production
+        update-types: [minor, patch]
+      dev-minor-patch:
+        dependency-type: development
+        update-types: [minor, patch]
+    labels: [dependencies]
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(deps-dev)"
+
+  # Base image do Dockerfile (node:24-slim) e afins.
+  - package-ecosystem: docker
+    directory: "/"
+    schedule:
+      interval: weekly
+    labels: [dependencies, docker]
+    commit-message:
+      prefix: "chore(docker)"
+
+  # Actions usadas nos workflows (checkout, setup-node, build-push, etc.).
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    labels: [dependencies, ci]
+    commit-message:
+      prefix: "chore(ci)"

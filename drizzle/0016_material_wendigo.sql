@@ -1,0 +1,1 @@
+ALTER TABLE "meeting_records" ADD COLUMN "dynamics_insight" jsonb;

@@ -1,0 +1,46 @@
+# pnpm v11 lê settings daqui (não mais do campo "pnpm" do package.json).
+#
+# allowBuilds (v11) substitui onlyBuiltDependencies (v10, deprecated): mapa
+# { pacote: true|false } controlando quem pode rodar lifecycle/build script.
+# pnpm bloqueia build scripts por default e sai com ERR_PNPM_IGNORED_BUILDS
+# sob --frozen-lockfile quando algum fica sem decisão explícita, quebrando o CI.
+#
+# true  = precisa do build nativo/runtime real (compila binário .node, etc).
+# false = tem build script mas não precisamos dele (drivers de teste, mocks).
+allowBuilds:
+  "@reown/appkit": true
+  bigint-buffer: true
+  bufferutil: true
+  esbuild: true
+  protobufjs: true
+  sharp: true
+  unrs-resolver: true
+  utf-8-validate: true
+  agent-browser: false
+  edgedriver: false
+  geckodriver: false
+  msw: false
+  # postinstall baixa um binário usado só p/ upload de sourcemaps (não usamos —
+  # sem withSentryConfig). O runtime capture do @sentry/nextjs não depende dele.
+  "@sentry/cli": false
+
+# Força versões corrigidas de deps TRANSITIVAS com CVE conhecido (pnpm audit).
+# Nenhuma é dep direta — todas entram via árvore (discord.js, mastra, drizzle-kit,
+# better-auth). Sobem só o patch de segurança, mantendo o range semver do pai.
+#   lodash  <4.17.24  → Code Injection via _.template (HIGH) + prototype pollution
+#   undici  <6.27.0   → WebSocket DoS (HIGH) + header injection / SameSite downgrade
+#   esbuild <0.24.3   → dev-server SSRF (moderate)
+#   postcss <8.5.10   → XSS via </style> no CSS stringify (moderate)
+# Revalide com `pnpm audit --prod` após o install.
+overrides:
+  "lodash@<4.17.24": ">=4.17.24"
+  "undici@<6.27.0": ">=6.27.0"
+  "esbuild@<0.24.3": ">=0.24.3"
+  "postcss@<8.5.10": ">=8.5.10"
+  # DoS / resource-consumption (transitivas, sem patch upstream ainda):
+  "js-yaml@<3.15.0": ">=3.15.0"
+  "@opentelemetry/core@<2.8.0": ">=2.8.0"
+  # NOTA: @ai-sdk/provider-utils (GHSA-866g-f22w-33x8, LOW, resource-consumption)
+  # fica pinado em 3.0.25 pelo peer-range do @mastra/core — o fix >=3.0.98 só
+  # existe na major 4.x, e forçá-la quebra os peers do mastra. Aceito até o
+  # mastra subir o range. Só DoS, via dep transitiva.

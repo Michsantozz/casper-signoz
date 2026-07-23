@@ -1,0 +1,43 @@
+# Override LOCAL (não versionado) — deploy via Cloudflare tunnel careglyph.
+#
+# A porta 3000 do host está ocupada por outro app (evolution_frontend), então o
+# app do CasperAgent é publicado em 3009 — a mesma porta que o tunnel
+# careglyph-local.yml (casper.careglyph.com) já roteia. Assim o tunnel funciona
+# sem editar o ingress principal.
+#
+# MinIO continua em 9200/9201 (host) — o mesmo container já rodando.
+
+services:
+  # Pin MinIO ao digest estável (a "latest" de ~10 meses que rodava saudável).
+  # A tag latest passou a resolver p/ RELEASE.2025-04-08, que falha no boot com
+  # "Unable to initialize OpenID: found invalid keys" e nunca fica ready.
+  minio:
+    image: minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
+
+  app:
+    # !override REPLACES the base ports list (compose merges lists by default,
+    # which would keep the base 3000:3000 and collide with evolution_frontend).
+    ports: !override
+      - "3009:3000"
+
+  inngest:
+    # `inngest start` (prod) não autodescobre como o dev. Precisa do --sdk-url
+    # apontando pro endpoint do app (rede interna do compose) pra sincronizar as
+    # functions/workflows por polling. Sem isso: 0 functions, crons não disparam.
+    #
+    # CRÍTICO: `inngest start` NÃO lê INNGEST_EVENT_KEY/INNGEST_SIGNING_KEY do
+    # ambiente — só via flags --event-key / --signing-key. Sem elas o server usa
+    # keys default e REJEITA todo evento do app ("event key not recognized").
+    # sh -c pra interpolar as keys que o `environment:` do base já injeta.
+    command: !override
+      - "/bin/sh"
+      - "-c"
+      - >
+        exec inngest start
+        --sdk-url http://app:3000/api/inngest
+        --event-key "$$INNGEST_EVENT_KEY"
+        --signing-key "$$INNGEST_SIGNING_KEY"
+    # inngest só descobre depois do app estar healthy.
+    depends_on:
+      app:
+        condition: service_healthy
