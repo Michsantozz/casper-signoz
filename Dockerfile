@@ -5,7 +5,7 @@
 # node:24 (engines.node >=24), pnpm via corepack (packageManager pin), non-root.
 
 # ---- base ----------------------------------------------------------------
-FROM node:24-slim AS base
+FROM node:26-slim AS base
 ENV PNPM_HOME="/pnpm"
 ENV PATH="$PNPM_HOME:$PATH"
 # corepack respeita packageManager: "pnpm@11.11.0" do package.json (versão exata).
