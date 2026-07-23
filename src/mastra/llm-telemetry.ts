@@ -256,3 +256,83 @@ export function withLlmTelemetry<M extends Parameters<typeof wrapLanguageModel>[
 ) {
   return wrapLanguageModel({ model, middleware: llmTelemetryMiddleware });
 }
+
+// ════════════════════════════════════════════════════════════════════════
+// Tool-call telemetry
+// ════════════════════════════════════════════════════════════════════════
+//
+// Same rationale as the LLM span: Mastra's exporter never lands a queryable
+// tool_call span in SigNoz (it only enqueues leaf model_chunk/processor_run
+// spans). We emit our own so the "Tool calls" panels + the tool-failures alert
+// have a real data source. One CLIENT span per tool execution, carrying the
+// tool name, duration, and error.type on failure.
+function emitToolSpan(args: {
+  toolName: string;
+  durationMs: number;
+  error?: unknown;
+}) {
+  const tracer = getTracer();
+  if (!tracer) return;
+
+  const span = tracer.startSpan(
+    `execute_tool ${args.toolName}`,
+    { kind: SpanKind.CLIENT, startTime: new Date(Date.now() - args.durationMs) },
+    context.active(),
+  );
+
+  span.setAttribute("gen_ai.operation.name", "execute_tool");
+  span.setAttribute("gen_ai.tool.name", args.toolName);
+  // Discriminator our versioned SigNoz dashboards/alerts filter on.
+  span.setAttribute("mastra.span.type", "tool_call");
+  if (args.error) {
+    span.setStatus({ code: SpanStatusCode.ERROR });
+    span.setAttribute(
+      "error.type",
+      args.error instanceof Error ? args.error.name : "unknown",
+    );
+  }
+  span.end();
+}
+
+// A Mastra tool: the only field we touch is `execute`, whose signature we keep
+// intact by inference. `id` names the span.
+type ExecutableTool = { id?: string; execute?: (...a: never[]) => unknown };
+
+// Wrap a single Mastra tool so each execution emits a tool_call span. Preserves
+// the tool object (schemas, description, id) and the exact execute signature —
+// only side-effects a span around the call, never changes input or output.
+export function withToolTelemetry<T extends ExecutableTool>(
+  tool: T,
+  name?: string,
+): T {
+  if (typeof tool.execute !== "function") return tool;
+  const toolName = name ?? tool.id ?? "unknown";
+  const original = tool.execute.bind(tool) as (...a: never[]) => unknown;
+
+  const wrapped = async (...callArgs: never[]) => {
+    const started = Date.now();
+    try {
+      const result = await original(...callArgs);
+      emitToolSpan({ toolName, durationMs: Date.now() - started });
+      return result;
+    } catch (error) {
+      emitToolSpan({ toolName, durationMs: Date.now() - started, error });
+      throw error;
+    }
+  };
+
+  return { ...tool, execute: wrapped } as T;
+}
+
+// Wrap every tool in an agent's toolset map. The map KEY is the exposed tool
+// name (what the model calls), so we use it as the span's tool name — keeping
+// dashboard labels aligned with what the LLM sees.
+export function wrapToolset<M extends Record<string, ExecutableTool>>(
+  toolset: M,
+): M {
+  const out: Record<string, ExecutableTool> = {};
+  for (const [name, tool] of Object.entries(toolset)) {
+    out[name] = withToolTelemetry(tool, name);
+  }
+  return out as M;
+}

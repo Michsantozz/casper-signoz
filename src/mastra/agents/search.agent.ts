@@ -1,5 +1,6 @@
 import { Agent } from "@mastra/core/agent";
 import { createModel } from "@/mastra/model";
+import { wrapToolset } from "@/mastra/llm-telemetry";
 import {
   listMyMeetingsTool,
   searchMyMeetingsTool,
@@ -42,9 +43,9 @@ User: What did we decide about the budget?
 You: In your July 3 meeting ("Weekly finance sync") you agreed to freeze the marketing budget for Q3 and revisit it in September. Want the full minutes of that one?
 </example>`,
   model: () => createModel(),
-  tools: {
+  tools: wrapToolset({
     list_my_meetings: listMyMeetingsTool,
     search_my_meetings: searchMyMeetingsTool,
     get_team_trends: getTeamTrendsTool,
-  },
+  }),
 });

@@ -1,6 +1,7 @@
 import { Agent } from "@mastra/core/agent";
 import { Memory } from "@mastra/memory";
 import { createModel, createEmbedder } from "@/mastra/model";
+import { wrapToolset } from "@/mastra/llm-telemetry";
 import { getMastraStore, getMastraVector } from "@/mastra/storage";
 import {
   getRecallTranscriptTool,
@@ -99,11 +100,11 @@ You call summarize_meeting, then present:
         },
       },
     }),
-  tools: {
+  tools: wrapToolset({
     summarize_meeting: summarizeRecallMeetingTool,
     get_participants: getRecallParticipantsTool,
     get_transcript: getRecallTranscriptTool,
     get_recording: getRecallRecordingTool,
     get_meeting_dynamics: getMeetingDynamicsTool,
-  },
+  }),
 });

@@ -9,6 +9,7 @@ import {
   type OutputProcessor,
 } from "@mastra/core/processors";
 import { createModel, createEmbedder } from "@/mastra/model";
+import { wrapToolset } from "@/mastra/llm-telemetry";
 import { getMastraStore, getMastraVector } from "@/mastra/storage";
 import { minutesAgent } from "@/mastra/agents/minutes.agent";
 import { searchAgent } from "@/mastra/agents/search.agent";
@@ -43,7 +44,10 @@ import {
 // to the invoked agent — they don't reach sub-agents. The "minutes" and
 // "cross-meeting search" domains have no client tools, so they live in
 // minutesAgent / searchAgent and the supervisor delegates to them.
-const localTools = {
+// wrapToolset attaches the tool_call telemetry span to every execution (so the
+// SigNoz "Tool calls" panels + tool-failures alert have a data source); the map
+// key is used as the span's tool name. See mastra/llm-telemetry.ts.
+const localTools = wrapToolset({
   // --- Meetings (Recall.ai): scheduling + live bot control ---
   send_bot_to_meeting: scheduleRecallBotTool,
   get_bot_status: getRecallBotTool,
@@ -58,7 +62,7 @@ const localTools = {
   remove_bot_from_event: removeBotFromEventTool,
   create_calendar_event: createCalendarEventTool,
   get_free_slots: getFreeSlotsTool,
-};
+});
 
 /**
  * Guardrails / cost control (input side). The chat is public-facing and spends
