@@ -1,0 +1,59 @@
+{
+  "alert": "CasperAgent — Tool call failures",
+  "alertType": "TRACES_BASED_ALERT",
+  "ruleType": "threshold_rule",
+  "schemaVersion": "v2alpha1",
+  "description": "Agent tool executions (mastra.span.type = tool_call) that carry an error.type crossed the threshold in the evaluation window. Points to a failing tool, an ownership/permission guard rejecting calls, or a broken upstream (Recall.ai, calendar).",
+  "condition": {
+    "compositeQuery": {
+      "queries": [
+        {
+          "type": "builder_query",
+          "spec": {
+            "name": "A",
+            "signal": "traces",
+            "stepInterval": 60,
+            "disabled": false,
+            "filter": { "expression": "mastra.span.type = 'tool_call' AND error.type EXISTS" },
+            "groupBy": [
+              { "name": "gen_ai.tool.name", "fieldDataType": "string", "fieldContext": "tag" }
+            ],
+            "legend": "{{gen_ai.tool.name}}",
+            "having": { "expression": "" },
+            "aggregations": [{ "expression": "count()" }]
+          }
+        }
+      ],
+      "panelType": "graph",
+      "queryType": "builder",
+      "unit": "none"
+    },
+    "selectedQueryName": "A",
+    "thresholds": {
+      "kind": "basic",
+      "spec": [
+        {
+          "name": "critical",
+          "target": 5,
+          "matchType": "at_least_once",
+          "op": "above"
+        }
+      ]
+    }
+  },
+  "labels": { "severity": "critical", "component": "agent-tools" },
+  "annotations": {
+    "summary": "Tool call failures above {{$threshold}} in window",
+    "description": "{{$value}} failing tool_call spans observed."
+  },
+  "evaluation": {
+    "kind": "rolling",
+    "spec": { "evalWindow": "5m", "frequency": "1m" }
+  },
+  "notificationSettings": {
+    "groupBy": ["gen_ai.tool.name"],
+    "renotify": { "enabled": true, "interval": "1h", "alertStates": ["firing"] },
+    "usePolicy": false
+  },
+  "disabled": false
+}

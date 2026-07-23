@@ -1,0 +1,76 @@
+{
+  "alert": "CasperAgent — LLM cost spike",
+  "alertType": "TRACES_BASED_ALERT",
+  "ruleType": "threshold_rule",
+  "schemaVersion": "v2alpha1",
+  "description": "Estimated LLM spend in the evaluation window exceeded the target. Cost is DERIVED by formula (tokens x price) because the Mastra OtelExporter emits no cost attribute. PRICE PLACEHOLDER 0.0000009 USD/token (=$0.90 / 1M) for input and output — replace both constants in formula F1 with the real Fireworks glm-5p2 rate before relying on the dollar figure.",
+  "condition": {
+    "compositeQuery": {
+      "queries": [
+        {
+          "type": "builder_query",
+          "spec": {
+            "name": "A",
+            "signal": "traces",
+            "stepInterval": 60,
+            "disabled": true,
+            "filter": { "expression": "mastra.span.type = 'model_generation'" },
+            "having": { "expression": "" },
+            "aggregations": [{ "expression": "sum(gen_ai.usage.input_tokens)" }]
+          }
+        },
+        {
+          "type": "builder_query",
+          "spec": {
+            "name": "B",
+            "signal": "traces",
+            "stepInterval": 60,
+            "disabled": true,
+            "filter": { "expression": "mastra.span.type = 'model_generation'" },
+            "having": { "expression": "" },
+            "aggregations": [{ "expression": "sum(gen_ai.usage.output_tokens)" }]
+          }
+        },
+        {
+          "type": "builder_formula",
+          "spec": {
+            "name": "F1",
+            "expression": "A * 0.0000009 + B * 0.0000009",
+            "disabled": false,
+            "legend": "est. cost (USD)"
+          }
+        }
+      ],
+      "panelType": "graph",
+      "queryType": "builder",
+      "unit": "none"
+    },
+    "selectedQueryName": "F1",
+    "thresholds": {
+      "kind": "basic",
+      "spec": [
+        {
+          "name": "critical",
+          "target": 5,
+          "matchType": "at_least_once",
+          "op": "above"
+        }
+      ]
+    }
+  },
+  "labels": { "severity": "warning", "component": "llm", "kind": "cost" },
+  "annotations": {
+    "summary": "Estimated LLM cost above ${{$threshold}} in window",
+    "description": "Derived spend reached ${{$value}} over the evaluation window."
+  },
+  "evaluation": {
+    "kind": "rolling",
+    "spec": { "evalWindow": "5m", "frequency": "1m" }
+  },
+  "notificationSettings": {
+    "groupBy": [],
+    "renotify": { "enabled": true, "interval": "2h", "alertStates": ["firing"] },
+    "usePolicy": false
+  },
+  "disabled": false
+}
