@@ -48,11 +48,32 @@ curl -X PUT "$SIGNOZ/api/v1/trace-funnels/steps/update" -H "SIGNOZ-API-KEY: $KEY
 Then open **Traces → Funnels** in the SigNoz UI, or query
 `POST /api/v1/trace-funnels/{id}/analytics/{overview,steps/overview,slow-traces}`.
 
+## Robust alternative: the dashboard conversion panels
+
+The SigNoz funnel FEATURE is span-name-bound (see caveat below), so it can't be
+made rename-proof. For a robust, attribute-only view of the same pipeline, the
+dashboard (`../dashboards/agent-llm-observability.json`) carries a **Pipeline
+conversion** row that reproduces the funnel WITHOUT the fragility:
+
+- runs → reached-tool → reached-generation, each a `count_distinct(trace_id)`
+  matched on the stable OTel `gen_ai.operation.name` attribute
+  (`invoke_agent` / `execute_tool` / `chat`), plus `casper.self_instrumented`
+  on the generate step to skip the duplicate native span;
+- two conversion-% tiles (`(B/A)*100`) and a drop-off time series.
+
+Because it matches on the semconv attribute, not the display name, it counts
+EVERY tool (not one hardcoded tool) and survives agent/tool/model renames. Verified
+live via the query API (tool conversion resolved to a real %). Prefer these panels
+for the trustworthy number; keep the funnel below for the SigNoz UI's native
+funnel visualization.
+
 ## Caveats (honest)
 
 - **Step match is by exact `span_name`**, not by attribute. SigNoz's funnel query
   matches `service_name = X AND name = <span_name>`; the per-step `filters` are a
-  secondary refinement, not the primary match. Mastra's local tool spans are named
+  secondary refinement, not the primary match (verified against SigNoz v0.134: the
+  funnel steps API doesn't accept an attribute-only step — hence the dashboard
+  panels above for the robust view). Mastra's local tool spans are named
   `execute_tool <toolId>`, so step 2 is pinned to one representative tool on the
   assistant's common path (`list_calendar_events`). A truly tool-agnostic step 2
   would need a stable per-phase span name (e.g. emitting an `agent.tool_phase`

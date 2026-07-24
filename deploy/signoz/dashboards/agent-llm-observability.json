@@ -1320,6 +1320,412 @@
             }
           ]
         }
+      },
+      "ffffffff-0000-0000-0000-0000000cv001": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Pipeline: runs",
+            "description": "Distinct agent runs started in the window (count_distinct trace by gen_ai.operation.name = invoke_agent). The top of the pipeline."
+          },
+          "plugin": {
+            "kind": "signoz/NumberPanel",
+            "spec": {
+              "visualization": {
+                "timePreference": "global_time"
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "scalar",
+              "spec": {
+                "plugin": {
+                  "kind": "signoz/CompositeQuery",
+                  "spec": {
+                    "queries": [
+                      {
+                        "type": "builder_query",
+                        "spec": {
+                          "name": "A",
+                          "signal": "traces",
+                          "stepInterval": 60,
+                          "disabled": false,
+                          "filter": {
+                            "expression": "gen_ai.operation.name = 'invoke_agent'"
+                          },
+                          "having": {
+                            "expression": ""
+                          },
+                          "aggregations": [
+                            {
+                              "expression": "count_distinct(trace_id)"
+                            }
+                          ]
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "ffffffff-0000-0000-0000-0000000cv002": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Pipeline: reached tool",
+            "description": "Distinct runs that executed at least one tool (gen_ai.operation.name = execute_tool — ANY tool, not one hardcoded). Robust to tool renames."
+          },
+          "plugin": {
+            "kind": "signoz/NumberPanel",
+            "spec": {
+              "visualization": {
+                "timePreference": "global_time"
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "scalar",
+              "spec": {
+                "plugin": {
+                  "kind": "signoz/CompositeQuery",
+                  "spec": {
+                    "queries": [
+                      {
+                        "type": "builder_query",
+                        "spec": {
+                          "name": "A",
+                          "signal": "traces",
+                          "stepInterval": 60,
+                          "disabled": false,
+                          "filter": {
+                            "expression": "gen_ai.operation.name = 'execute_tool'"
+                          },
+                          "having": {
+                            "expression": ""
+                          },
+                          "aggregations": [
+                            {
+                              "expression": "count_distinct(trace_id)"
+                            }
+                          ]
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "ffffffff-0000-0000-0000-0000000cv003": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Pipeline: reached generation",
+            "description": "Distinct runs that reached a final model generation (our deduped chat span: gen_ai.operation.name = chat AND casper.self_instrumented = true)."
+          },
+          "plugin": {
+            "kind": "signoz/NumberPanel",
+            "spec": {
+              "visualization": {
+                "timePreference": "global_time"
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "scalar",
+              "spec": {
+                "plugin": {
+                  "kind": "signoz/CompositeQuery",
+                  "spec": {
+                    "queries": [
+                      {
+                        "type": "builder_query",
+                        "spec": {
+                          "name": "A",
+                          "signal": "traces",
+                          "stepInterval": 60,
+                          "disabled": false,
+                          "filter": {
+                            "expression": "gen_ai.operation.name = 'chat' AND casper.self_instrumented = true"
+                          },
+                          "having": {
+                            "expression": ""
+                          },
+                          "aggregations": [
+                            {
+                              "expression": "count_distinct(trace_id)"
+                            }
+                          ]
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "ffffffff-0000-0000-0000-0000000cv004": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Tool conversion %",
+            "description": "Of the runs that started, what % reached a tool call = reached-tool / runs. Robust attribute-based funnel step 1 -> 2."
+          },
+          "plugin": {
+            "kind": "signoz/NumberPanel",
+            "spec": {
+              "visualization": {
+                "timePreference": "global_time"
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "scalar",
+              "spec": {
+                "plugin": {
+                  "kind": "signoz/CompositeQuery",
+                  "spec": {
+                    "queries": [
+                      {
+                        "type": "builder_query",
+                        "spec": {
+                          "name": "A",
+                          "signal": "traces",
+                          "stepInterval": 60,
+                          "disabled": true,
+                          "filter": {
+                            "expression": "gen_ai.operation.name = 'invoke_agent'"
+                          },
+                          "having": {
+                            "expression": ""
+                          },
+                          "aggregations": [
+                            {
+                              "expression": "count_distinct(trace_id)"
+                            }
+                          ]
+                        }
+                      },
+                      {
+                        "type": "builder_query",
+                        "spec": {
+                          "name": "B",
+                          "signal": "traces",
+                          "stepInterval": 60,
+                          "disabled": true,
+                          "filter": {
+                            "expression": "gen_ai.operation.name = 'execute_tool'"
+                          },
+                          "having": {
+                            "expression": ""
+                          },
+                          "aggregations": [
+                            {
+                              "expression": "count_distinct(trace_id)"
+                            }
+                          ]
+                        }
+                      },
+                      {
+                        "type": "builder_formula",
+                        "spec": {
+                          "name": "F1",
+                          "expression": "(B / A) * 100",
+                          "disabled": false,
+                          "legend": "conversion %"
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "ffffffff-0000-0000-0000-0000000cv005": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Generation conversion %",
+            "description": "Of the runs that reached a tool, what % reached a final generation = reached-generation / reached-tool. Funnel step 2 -> 3; a low value means runs error or stall after tools."
+          },
+          "plugin": {
+            "kind": "signoz/NumberPanel",
+            "spec": {
+              "visualization": {
+                "timePreference": "global_time"
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "scalar",
+              "spec": {
+                "plugin": {
+                  "kind": "signoz/CompositeQuery",
+                  "spec": {
+                    "queries": [
+                      {
+                        "type": "builder_query",
+                        "spec": {
+                          "name": "A",
+                          "signal": "traces",
+                          "stepInterval": 60,
+                          "disabled": true,
+                          "filter": {
+                            "expression": "gen_ai.operation.name = 'execute_tool'"
+                          },
+                          "having": {
+                            "expression": ""
+                          },
+                          "aggregations": [
+                            {
+                              "expression": "count_distinct(trace_id)"
+                            }
+                          ]
+                        }
+                      },
+                      {
+                        "type": "builder_query",
+                        "spec": {
+                          "name": "B",
+                          "signal": "traces",
+                          "stepInterval": 60,
+                          "disabled": true,
+                          "filter": {
+                            "expression": "gen_ai.operation.name = 'chat' AND casper.self_instrumented = true"
+                          },
+                          "having": {
+                            "expression": ""
+                          },
+                          "aggregations": [
+                            {
+                              "expression": "count_distinct(trace_id)"
+                            }
+                          ]
+                        }
+                      },
+                      {
+                        "type": "builder_formula",
+                        "spec": {
+                          "name": "F1",
+                          "expression": "(B / A) * 100",
+                          "disabled": false,
+                          "legend": "conversion %"
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "ffffffff-0000-0000-0000-0000000cv006": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Pipeline drop-off over time",
+            "description": "Distinct agent runs reaching each phase over time — runs (invoke_agent), reached-tool (execute_tool, any tool), reached-generation (our deduped chat span). Matched on the stable OTel gen_ai.operation.name attribute, not on span display names, so renames don't break it. The gap between the lines is where runs drop off."
+          },
+          "plugin": {
+            "kind": "signoz/TimeSeriesPanel",
+            "spec": {}
+          },
+          "queries": [
+            {
+              "kind": "timeseries",
+              "spec": {
+                "plugin": {
+                  "kind": "signoz/CompositeQuery",
+                  "spec": {
+                    "queries": [
+                      {
+                        "type": "builder_query",
+                        "spec": {
+                          "name": "A",
+                          "signal": "traces",
+                          "stepInterval": 60,
+                          "disabled": false,
+                          "filter": {
+                            "expression": "gen_ai.operation.name = 'invoke_agent'"
+                          },
+                          "groupBy": [],
+                          "legend": "runs",
+                          "having": {
+                            "expression": ""
+                          },
+                          "aggregations": [
+                            {
+                              "expression": "count_distinct(trace_id)"
+                            }
+                          ]
+                        }
+                      },
+                      {
+                        "type": "builder_query",
+                        "spec": {
+                          "name": "B",
+                          "signal": "traces",
+                          "stepInterval": 60,
+                          "disabled": false,
+                          "filter": {
+                            "expression": "gen_ai.operation.name = 'execute_tool'"
+                          },
+                          "groupBy": [],
+                          "legend": "reached tool",
+                          "having": {
+                            "expression": ""
+                          },
+                          "aggregations": [
+                            {
+                              "expression": "count_distinct(trace_id)"
+                            }
+                          ]
+                        }
+                      },
+                      {
+                        "type": "builder_query",
+                        "spec": {
+                          "name": "C",
+                          "signal": "traces",
+                          "stepInterval": 60,
+                          "disabled": false,
+                          "filter": {
+                            "expression": "gen_ai.operation.name = 'chat' AND casper.self_instrumented = true"
+                          },
+                          "groupBy": [],
+                          "legend": "reached generation",
+                          "having": {
+                            "expression": ""
+                          },
+                          "aggregations": [
+                            {
+                              "expression": "count_distinct(trace_id)"
+                            }
+                          ]
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        }
       }
     },
     "layouts": [
@@ -1514,6 +1920,60 @@
               "height": 5,
               "content": {
                 "$ref": "#/spec/panels/eeeeeeee-0000-0000-0000-00000000L002"
+              }
+            },
+            {
+              "x": 0,
+              "y": 39,
+              "width": 2,
+              "height": 3,
+              "content": {
+                "$ref": "#/spec/panels/ffffffff-0000-0000-0000-0000000cv001"
+              }
+            },
+            {
+              "x": 2,
+              "y": 39,
+              "width": 2,
+              "height": 3,
+              "content": {
+                "$ref": "#/spec/panels/ffffffff-0000-0000-0000-0000000cv002"
+              }
+            },
+            {
+              "x": 4,
+              "y": 39,
+              "width": 2,
+              "height": 3,
+              "content": {
+                "$ref": "#/spec/panels/ffffffff-0000-0000-0000-0000000cv003"
+              }
+            },
+            {
+              "x": 6,
+              "y": 39,
+              "width": 3,
+              "height": 3,
+              "content": {
+                "$ref": "#/spec/panels/ffffffff-0000-0000-0000-0000000cv004"
+              }
+            },
+            {
+              "x": 9,
+              "y": 39,
+              "width": 3,
+              "height": 3,
+              "content": {
+                "$ref": "#/spec/panels/ffffffff-0000-0000-0000-0000000cv005"
+              }
+            },
+            {
+              "x": 0,
+              "y": 42,
+              "width": 12,
+              "height": 5,
+              "content": {
+                "$ref": "#/spec/panels/ffffffff-0000-0000-0000-0000000cv006"
               }
             }
           ]
