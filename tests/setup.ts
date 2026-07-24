@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll } from "vitest"
 import { server } from "./msw/server"
 
 // LIVE mode (RUN_LIVE_E2E=1): load env so live tests hit real services
-// (Casper Testnet, Bedrock, Recall). Reads .env.local first (Next's convention —
+// (the LLM provider + Recall.ai). Reads .env.local first (Next's convention —
 // creds live there) then .env; first writer wins (??=), so .env.local precedes.
 if (process.env.RUN_LIVE_E2E === "1") {
   const fs = await import("node:fs")
