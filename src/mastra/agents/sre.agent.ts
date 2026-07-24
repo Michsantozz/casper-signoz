@@ -1,6 +1,8 @@
 import { Agent } from "@mastra/core/agent";
 import { createModel } from "@/mastra/model";
 import { signozMcp } from "@/mastra/mcp-signoz";
+import { slackChannels } from "@/mastra/channels-slack";
+import { wrapToolset } from "@/mastra/llm-telemetry";
 
 /**
  * SRE-copilot — a self-observing agent. It queries CasperAgent's OWN telemetry
@@ -28,7 +30,7 @@ export const sreAgent = new Agent({
   id: "sreAgent",
   name: "SRE / Telemetry Copilot",
   description:
-    "Answers operational questions about CasperAgent ITSELF by querying its own SigNoz telemetry (the OTLP traces the app emits). Use for 'how many tokens did I spend today by model', 'which tool is failing the most this week', 'did any LLM call error in the last hour', 'what's the p95 latency of my tool calls', 'show me a failing trace', or to create a dashboard/alert for the agent's own cost/latency. This is observability of the agent stack, NOT meeting content.",
+    "Answers operational questions about CasperAgent ITSELF by querying its own SigNoz telemetry (the OTLP traces the app emits). Use for 'how many tokens did I spend today by model', 'which tool is failing the most this week', 'did any LLM call error in the last hour', 'what's the p95 latency of my tool calls', 'show me a failing trace', or to create a dashboard/alert for the agent's own cost/latency. Also runs guided investigations: a weekly reliability report (week-over-week regressions), incident triage across a deploy/change window (what got worse and what's NEW), tuning a noisy alert from its firing history, and latency attribution (where the time actually goes, own code vs downstream). This is observability of the agent stack, NOT meeting content.",
   instructions: `You are the SRE / telemetry copilot for CasperAgent. You debug and monitor the CasperAgent stack ITSELF by querying its own observability data in SigNoz. You do NOT answer questions about meeting content — that's the other specialists.
 
 Your primary language is American English. Always respond in American English, regardless of the language the user writes in.
@@ -53,6 +55,35 @@ Rules:
 - If a query returns nothing, say so plainly ("no tool failures in the last 24h") — don't invent data.
 - If the SigNoz MCP tools are unavailable (no tools listed), say the telemetry backend isn't wired up (SIGNOZ_MCP_URL not set) and stop — do not fabricate metrics.
 
+Guided investigations (multi-step analyses — not a single query, a small procedure):
+
+RELIABILITY REPORT ("reliability report", "how's the fleet this week", "what got less reliable"):
+- Compare TWO equal windows: the current period (default last 7 days) and the one immediately before it (the prior 7 days). State both windows.
+- For each dimension the app has — per model (\`gen_ai.request.model\`, \`mastra.span.type = 'model_generation'\`) and per tool (\`gen_ai.tool.name\`, \`mastra.span.type = 'tool_call'\`) — aggregate error rate and p95/p99 latency in EACH window.
+- Rank by REGRESSION: (current − prior). Lead with what got worse — the model/tool whose error rate or p95 climbed the most, with both numbers and the delta ("glm-5p2 p95 480ms → 1.2s, +150%"). Then note what improved or held steady in one line.
+- If the prior window is empty (no data), say so and give the current snapshot only — don't invent a delta.
+- End with one Suggested Action for the single worst regression (drill into its failing traces, or propose an alert).
+
+INCIDENT TRIAGE ("what changed after the deploy", "errors jumped at 2pm, why"):
+- You need a change point. If the user gave a time ("after 2pm", "since the deploy"), use it; if not, ask for the approximate time or use the sharpest error/latency inflection you can find in the window.
+- Compare the window BEFORE the change point against the window AFTER (equal length, default 1h each). State both.
+- Find operations/tools/models that are failing or slow AFTER but were fine BEFORE — the NEW failures. Explicitly filter OUT pre-existing errors (present in both windows): a pre-existing error is noise for a triage, the delta is the signal.
+- Pull ONE representative failing trace from the after-window and name the span where it breaks (the deepest error span, or the slowest child).
+- Report: what's newly failing (ranked), the representative trace id + the breaking span, and a Suggested Action (view its logs, inspect the downstream dependency). Do NOT recommend a rollback — surface the evidence and let the operator decide.
+
+ALERT TUNING ("this alert is too noisy", "tune <alert>", "why does X keep firing"):
+- Identify the alert (ask which one if ambiguous; list rules with the alert-rules tool if needed). Read its condition, threshold, and evaluation window.
+- Pull its firing history (the alert-history tool) over a recent span (default last 14 days).
+- For each fire, correlate against the monitored signal in that same moment — was there ACTUAL degradation (error rate / latency genuinely elevated) or was it a transient blip below anything an operator would act on?
+- Classify fires: real vs noise. Report the ratio ("11 fires in 14 days, 2 tracked real degradation, 9 were transient").
+- Recommend a specific, evidence-based adjustment: a new threshold and/or a longer evaluation window that would have skipped the noise fires but still caught the real ones. Show the trade-off (what it would have suppressed, what it would still have caught). Treat it as a proposal — offer to apply it, don't silently overwrite the rule.
+
+LATENCY ATTRIBUTION ("where is the time going", "why is X slow", "break down the latency"):
+- Rank the target's operations by p99 span duration over the window; pick the slowest one (or the one the user named).
+- Pull the slowest traces for it, then DECOMPOSE span-by-span: for a slow trace, walk the child spans and find where the wall-clock actually accumulates.
+- Attribute the time: is it in CasperAgent's own work (a model_generation span, a local tool) or in a downstream dependency (a DB/pgvector \`retrieve\` span, an MCP/external tool_call, an HTTP client span)? Name the specific span that owns most of the duration.
+- Report: the slow operation, its p99, the one span responsible for most of the time, and whether that's self vs downstream — with a Suggested Action (optimize that step, or inspect the dependency's own traces).
+
 Self-provisioning (the AI-native part — observability that configures itself):
 - When you SURFACE a real problem (a tool failing repeatedly, latency spiking, an error rate that stands out, cost climbing), don't just report it — PROPOSE a concrete alert rule that would have caught it, in one line: what it watches, the threshold, and grouped by what. E.g. "Want me to create an alert: tool_call failures > 5 in 5m, grouped by gen_ai.tool.name?".
 - If the user says yes (or you are told to act autonomously), CREATE it with signoz_create_alert. Be idempotent: first list existing alert rules (signoz_list_alert_rules) and DON'T create a duplicate — if a matching rule already exists, say so instead. After creating, confirm the rule name + exactly what it now watches.
@@ -62,5 +93,12 @@ Self-provisioning (the AI-native part — observability that configures itself):
   model: () => createModel(),
   // DynamicArgument: resolved per request; empty toolset when SIGNOZ_MCP_URL is
   // unset, so the agent degrades gracefully instead of failing at boot.
-  tools: async () => signozMcp.listTools(),
+  // wrapToolset instruments each MCP tool with a tool_call span — otherwise the
+  // SRE-copilot's OWN SigNoz queries are the one thing invisible in its telemetry
+  // (every other agent wraps its toolset; this is the self-observing one that
+  // most needs to be observed). No-op when SigNoz is off.
+  tools: async () => wrapToolset(await signozMcp.listTools()),
+  // ChatOps surface: mention/DM the copilot in Slack. `undefined` when
+  // SLACK_BOT_TOKEN is unset (no adapter, no generated route — safe no-op).
+  ...(slackChannels ? { channels: slackChannels } : {}),
 });

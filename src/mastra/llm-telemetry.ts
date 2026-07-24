@@ -1,8 +1,25 @@
 import "server-only";
 
-import { context, SpanKind, SpanStatusCode } from "@opentelemetry/api";
+import {
+  context,
+  metrics,
+  trace,
+  SpanKind,
+  SpanStatusCode,
+  TraceFlags,
+  type Context,
+  type Counter,
+  type Histogram,
+  type Meter,
+} from "@opentelemetry/api";
+import { getCurrentSpan } from "@mastra/core/observability/context-storage";
+import { OTLPMetricExporter } from "@opentelemetry/exporter-metrics-otlp-proto";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-proto";
 import { resourceFromAttributes } from "@opentelemetry/resources";
+import {
+  MeterProvider,
+  PeriodicExportingMetricReader,
+} from "@opentelemetry/sdk-metrics";
 import {
   BasicTracerProvider,
   BatchSpanProcessor,
@@ -77,9 +94,103 @@ export function getSignozTracer() {
   return tracerProvider.getTracer("casper.llm");
 }
 
-// Flush pending spans (call on graceful shutdown / after a one-shot script).
+// ────────────────────────────────────────────────────────────────────────
+// Metrics pipeline (OTLP) — the fifth SigNoz signal.
+//
+// WHY: Mastra's OtelExporter forwards only TRACES + LOGS (it has no
+// onMetricEvent), so token/cost/latency reach SigNoz solely as span attributes.
+// That works for trace-derived dashboards but leaves SigNoz's native *metrics*
+// store empty — no first-class time series to build Query-Builder metric panels,
+// PromQL, or metric-based alerts on. This adds a dedicated OTLP MeterProvider
+// (twin of the tracer above) so the same numbers ALSO land as real OTel metrics:
+//   - gen_ai.client.token.usage      (Counter, by model/provider/token type)
+//   - gen_ai.client.operation.cost   (Counter, USD, by model/provider)
+//   - gen_ai.client.operation.duration (Histogram, seconds, by op/model/tool)
+// Emitted alongside every span, so metrics and traces stay in lock-step. Same
+// env toggle as the tracer — no-op when SigNoz is unconfigured.
+// ────────────────────────────────────────────────────────────────────────
+
+let meterProvider: MeterProvider | undefined;
+let instruments:
+  | {
+      tokens: Counter;
+      cost: Counter;
+      duration: Histogram;
+    }
+  | undefined;
+
+// Derive the metrics OTLP path from SIGNOZ_ENDPOINT (which points at
+// …/v1/traces). The OTLP proto metric exporter wants …/v1/metrics on the same
+// collector. Swap the signal segment; fall back to the local self-host default.
+function metricsEndpoint(): string {
+  const traces = process.env.SIGNOZ_ENDPOINT;
+  if (!traces) return "http://localhost:4318/v1/metrics";
+  return traces.replace(/\/v1\/traces\/?$/, "/v1/metrics");
+}
+
+function getSignozMeter(): Meter | undefined {
+  if (!process.env.SIGNOZ_ENDPOINT && !process.env.SIGNOZ_API_KEY) {
+    return undefined;
+  }
+
+  if (!meterProvider) {
+    const headers = process.env.SIGNOZ_API_KEY
+      ? { "signoz-access-token": process.env.SIGNOZ_API_KEY }
+      : undefined;
+
+    meterProvider = new MeterProvider({
+      resource: resourceFromAttributes({
+        [ATTR_SERVICE_NAME]: SERVICE_NAME,
+        [ATTR_SERVICE_VERSION]: process.env.npm_package_version ?? "0.0.0",
+      }),
+      readers: [
+        new PeriodicExportingMetricReader({
+          exporter: new OTLPMetricExporter({
+            url: metricsEndpoint(),
+            headers,
+          }),
+          // Ship every 10s so metric panels track a live demo closely.
+          exportIntervalMillis: 10_000,
+        }),
+      ],
+    });
+    // Register globally too, so any OTel-aware library metric rides the same
+    // provider instead of standing up a second (never-flushed) one.
+    metrics.setGlobalMeterProvider(meterProvider);
+  }
+
+  return meterProvider.getMeter("casper.llm");
+}
+
+// Build the instruments once (idempotent). Counters/Histogram share the meter.
+function getInstruments() {
+  if (instruments) return instruments;
+  const meter = getSignozMeter();
+  if (!meter) return undefined;
+  instruments = {
+    // Follows the OTel GenAI metric semconv names so SigNoz's native metric
+    // views recognize them.
+    tokens: meter.createCounter("gen_ai.client.token.usage", {
+      description: "LLM tokens consumed, by model/provider/token type",
+      unit: "{token}",
+    }),
+    cost: meter.createCounter("gen_ai.client.operation.cost", {
+      description: "LLM call cost in USD (only when pricing is configured)",
+      unit: "USD",
+    }),
+    duration: meter.createHistogram("gen_ai.client.operation.duration", {
+      description: "Duration of a GenAI operation (LLM / tool / retrieval)",
+      unit: "s",
+    }),
+  };
+  return instruments;
+}
+
+// Flush pending spans + metrics (call on graceful shutdown / after a one-shot
+// script). Metrics flush forces the reader to export before exit.
 export async function flushLlmTelemetry() {
   await tracerProvider?.forceFlush().catch(() => {});
+  await meterProvider?.forceFlush().catch(() => {});
 }
 
 // Normalized token counts, flattened from the AI SDK v3 usage shape
@@ -88,6 +199,7 @@ type TokenCounts = {
   inputTokens?: number;
   outputTokens?: number;
   cacheReadTokens?: number;
+  cacheWriteTokens?: number;
 };
 
 // AI SDK v3 usage: token fields are objects, not numbers. Flatten to plain
@@ -95,7 +207,9 @@ type TokenCounts = {
 function extractUsage(usage: unknown): TokenCounts {
   const u = usage as
     | {
-        inputTokens?: number | { total?: number; cacheRead?: number };
+        inputTokens?:
+          | number
+          | { total?: number; cacheRead?: number; cacheWrite?: number };
         outputTokens?: number | { total?: number };
       }
     | null
@@ -107,10 +221,16 @@ function extractUsage(usage: unknown): TokenCounts {
   const output = typeof outRaw === "number" ? outRaw : outRaw?.total;
   const cacheRead =
     typeof inRaw === "number" ? undefined : inRaw?.cacheRead;
+  // Cache-WRITE (a.k.a. cache-creation) tokens: what it cost to populate the
+  // prompt cache this call. Distinct from cacheRead. Anthropic reports it
+  // separately; maps to gen_ai.usage.cache_creation.input_tokens.
+  const cacheWrite =
+    typeof inRaw === "number" ? undefined : inRaw?.cacheWrite;
   return {
     inputTokens: input,
     outputTokens: output,
     cacheReadTokens: cacheRead,
+    cacheWriteTokens: cacheWrite,
   };
 }
 
@@ -120,14 +240,16 @@ function emitLlmSpan(args: {
   usage: unknown;
   durationMs: number;
   finishReason?: string;
+  // Time-to-first-token in ms (streaming only). Feeds SigNoz's native AI
+  // Observability "TTFT p95" panel (gen_ai.server.ttft).
+  ttftMs?: number;
   error?: unknown;
 }) {
   const tracer = getSignozTracer();
   if (!tracer) return;
 
-  const { inputTokens, outputTokens, cacheReadTokens } = extractUsage(
-    args.usage,
-  );
+  const { inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens } =
+    extractUsage(args.usage);
 
   const priceIn = pricePerToken("LLM_PRICE_INPUT_PER_MTOK");
   const priceOut = pricePerToken("LLM_PRICE_OUTPUT_PER_MTOK");
@@ -144,12 +266,20 @@ function emitLlmSpan(args: {
   const span = tracer.startSpan(
     `chat ${args.modelId}`,
     { kind: SpanKind.CLIENT, startTime: new Date(Date.now() - args.durationMs) },
-    context.active(),
+    // Parent under Mastra's active agent span so this LLM call joins the E2E
+    // trace instead of standing up its own root.
+    mastraParentContext(),
   );
 
   span.setAttribute("gen_ai.operation.name", "chat");
   span.setAttribute("gen_ai.request.model", args.modelId);
   span.setAttribute("gen_ai.provider.name", args.provider);
+  // Legacy GenAI-semconv alias for the provider. SigNoz's built-in "AI
+  // Observability" dashboard identifies an LLM span by `gen_ai.system != ''`
+  // (not by the newer gen_ai.provider.name), so emitting both makes these spans
+  // ALSO light up SigNoz's native AI panels — on top of our own mastra.span.type
+  // dashboards. Purely additive; same value as gen_ai.provider.name.
+  span.setAttribute("gen_ai.system", args.provider);
   // Discriminator our versioned SigNoz dashboards/alerts filter on. This IS a
   // model generation, so the label is accurate — it just also lets the existing
   // panels match without a schema change.
@@ -163,9 +293,22 @@ function emitLlmSpan(args: {
   if (cacheReadTokens !== undefined) {
     span.setAttribute("gen_ai.usage.cache_read.input_tokens", cacheReadTokens);
   }
+  if (cacheWriteTokens !== undefined) {
+    // Cache-creation tokens. Canonical GenAI-semconv name SigNoz's native LLM
+    // pricing (EE) + AI dashboards read for cache-write cost accounting.
+    span.setAttribute(
+      "gen_ai.usage.cache_creation.input_tokens",
+      cacheWriteTokens,
+    );
+  }
   if (cost !== undefined) {
     // gen_ai.usage.cost is also what SigNoz's native LLM Observability reads.
     span.setAttribute("gen_ai.usage.cost", cost);
+  }
+  // Time-to-first-token: how long until the model emitted its first content
+  // chunk. Streaming only — the native SigNoz AI dashboard p95's gen_ai.server.ttft.
+  if (args.ttftMs !== undefined) {
+    span.setAttribute("gen_ai.server.ttft", args.ttftMs / 1000);
   }
   if (args.finishReason) {
     span.setAttribute(
@@ -175,17 +318,133 @@ function emitLlmSpan(args: {
   }
   if (args.error) {
     span.setStatus({ code: SpanStatusCode.ERROR });
-    span.setAttribute(
-      "error.type",
-      args.error instanceof Error ? args.error.name : "unknown",
-    );
+    const errType = args.error instanceof Error ? args.error.name : "unknown";
+    span.setAttribute("error.type", errType);
+    // GenAI-semconv error attribute — the native SigNoz AI dashboard groups its
+    // error panel by gen_ai.error.type. Same value as error.type; additive.
+    span.setAttribute("gen_ai.error.type", errType);
   }
   span.end();
+
+  // Mirror the same numbers as first-class OTel metrics (fifth SigNoz signal).
+  // Labels stay low-cardinality (model/provider/type) so metric series don't
+  // explode. No-op when SigNoz is off.
+  const inst = getInstruments();
+  if (inst) {
+    const base = {
+      "gen_ai.request.model": args.modelId,
+      "gen_ai.provider.name": args.provider,
+    };
+    if (inputTokens !== undefined) {
+      inst.tokens.add(inputTokens, { ...base, "gen_ai.token.type": "input" });
+    }
+    if (outputTokens !== undefined) {
+      inst.tokens.add(outputTokens, { ...base, "gen_ai.token.type": "output" });
+    }
+    if (cacheReadTokens !== undefined) {
+      inst.tokens.add(cacheReadTokens, {
+        ...base,
+        "gen_ai.token.type": "cache_read",
+      });
+    }
+    if (cacheWriteTokens !== undefined) {
+      inst.tokens.add(cacheWriteTokens, {
+        ...base,
+        "gen_ai.token.type": "cache_write",
+      });
+    }
+    if (cost !== undefined) inst.cost.add(cost, base);
+    inst.duration.record(args.durationMs / 1000, {
+      ...base,
+      "gen_ai.operation.name": "chat",
+    });
+  }
 }
 
 // Read the provider name off the wrapped model (e.g. "openai", "amazon-bedrock").
 function providerOf(model: { provider?: string }): string {
   return model.provider ?? "unknown";
+}
+
+// Bounded error-type LABEL for METRICS. On a span an error.type can be any
+// error.name — that's fine, it's an attribute. But as a metric label it joins
+// the series key, and an unbounded/dynamic error name (e.g. one that embeds an
+// id) would explode the time-series cardinality. So on the metric path we map to
+// a small closed set and bucket anything unexpected as "other". Spans keep the
+// raw name; only the metric label is clamped.
+const KNOWN_ERROR_TYPES = new Set([
+  "Error",
+  "TypeError",
+  "RangeError",
+  "AbortError",
+  "TimeoutError",
+  "RateLimitError",
+  "APICallError",
+  "APIError",
+  "AuthenticationError",
+  "PermissionError",
+  "NotFoundError",
+  "ValidationError",
+  "ZodError",
+]);
+
+// error → bounded metric label. "none" when there's no error, "unknown" for a
+// non-Error throw, the raw name when it's a known type, else "other".
+function errorMetricLabel(error: unknown): string {
+  if (!error) return "none";
+  if (!(error instanceof Error)) return "unknown";
+  return KNOWN_ERROR_TYPES.has(error.name) ? error.name : "other";
+}
+
+// ── Parenting our spans under Mastra's active span ──────────────────────────
+//
+// Mastra's AITracing keeps its own span tree (parentSpanId/traceId) and does
+// NOT push spans onto the OTel `context.active()` stack — so a naive
+// startSpan(..., context.active()) makes our LLM/tool/retrieval span a detached
+// ROOT, breaking the end-to-end waterfall (agent_run → model_generation →
+// tool_call/retrieve all in one trace) that the SigNoz AI trace view is built
+// on. Mastra DOES expose the currently-executing AISpan via getCurrentSpan()
+// (an AsyncLocalStorage that survives the AI-SDK middleware's await boundary —
+// verified at runtime), and every AISpan carries an OTel-compatible `traceId`
+// (32 hex) + `id` used AS the OTLP spanId (this is exactly what @mastra/otel-
+// exporter does: spanId = span.id, verbatim). So we read that span and forge a
+// non-recording parent SpanContext with the SAME ids; startSpan(childCtx) then
+// stitches our span into Mastra's trace as a proper child.
+//
+// Defensive: if there's no active Mastra span, or its ids aren't valid OTLP hex
+// (16 for span, 32 for trace), we fall back to context.active() — a detached
+// span is strictly better than one the OTLP endpoint silently drops for an
+// invalid id. Never throws.
+const SPAN_ID_RE = /^[0-9a-f]{16}$/;
+const TRACE_ID_RE = /^[0-9a-f]{32}$/;
+
+function mastraParentContext(): Context {
+  try {
+    const span = getCurrentSpan() as
+      | { id?: string; traceId?: string }
+      | undefined;
+    const spanId = span?.id;
+    const traceId = span?.traceId;
+    if (
+      typeof spanId === "string" &&
+      typeof traceId === "string" &&
+      SPAN_ID_RE.test(spanId) &&
+      TRACE_ID_RE.test(traceId)
+    ) {
+      return trace.setSpanContext(context.active(), {
+        traceId,
+        spanId,
+        // Sampled so SigNoz keeps the child; isRemote so OTel treats it as an
+        // injected parent rather than one it started.
+        traceFlags: TraceFlags.SAMPLED,
+        isRemote: true,
+      });
+    }
+  } catch {
+    // getCurrentSpan should never throw, but parenting is best-effort — a
+    // detached span beats losing telemetry.
+  }
+  return context.active();
 }
 
 // AI SDK middleware: wraps generate + stream, emits one LLM span per call with
@@ -223,12 +482,23 @@ export const llmTelemetryMiddleware: LanguageModelMiddleware = {
 
     let usage: unknown;
     let finishReason: string | undefined;
+    // Timestamp of the first content chunk — for time-to-first-token. Set once,
+    // on the earliest text/reasoning delta the model streams.
+    let firstChunkAt: number | undefined;
 
     // Tap the stream to capture the terminal usage without altering it. The AI
     // SDK emits a "finish" part carrying usage + finishReason at stream end.
     const tapped = stream.pipeThrough(
       new TransformStream({
         transform(chunk, controller) {
+          // First real output delta marks TTFT. Ignore stream-start/metadata
+          // parts — only content deltas count as "the model started answering".
+          if (
+            firstChunkAt === undefined &&
+            (chunk?.type === "text-delta" || chunk?.type === "reasoning-delta")
+          ) {
+            firstChunkAt = Date.now();
+          }
           if (chunk?.type === "finish") {
             usage = chunk.usage;
             finishReason = String(chunk.finishReason);
@@ -242,6 +512,8 @@ export const llmTelemetryMiddleware: LanguageModelMiddleware = {
             usage,
             durationMs: Date.now() - started,
             finishReason,
+            ttftMs:
+              firstChunkAt !== undefined ? firstChunkAt - started : undefined,
           });
         },
       }),
@@ -279,7 +551,9 @@ function emitToolSpan(args: {
   const span = tracer.startSpan(
     `execute_tool ${args.toolName}`,
     { kind: SpanKind.CLIENT, startTime: new Date(Date.now() - args.durationMs) },
-    context.active(),
+    // Parent under Mastra's active agent span so the tool_call joins the E2E
+    // trace (agent_run → model_generation → execute_tool) instead of a root.
+    mastraParentContext(),
   );
 
   span.setAttribute("gen_ai.operation.name", "execute_tool");
@@ -294,6 +568,16 @@ function emitToolSpan(args: {
     );
   }
   span.end();
+
+  // Tool latency as a first-class metric (labelled by tool + outcome).
+  const inst = getInstruments();
+  if (inst) {
+    inst.duration.record(args.durationMs / 1000, {
+      "gen_ai.operation.name": "execute_tool",
+      "gen_ai.tool.name": args.toolName,
+      "error.type": errorMetricLabel(args.error),
+    });
+  }
 }
 
 // A Mastra tool: the only field we touch is `execute`, whose signature we keep
@@ -372,7 +656,9 @@ function emitRetrievalSpan(args: {
   const span = tracer.startSpan(
     `retrieve ${args.indexName}`,
     { kind: SpanKind.CLIENT, startTime: new Date(Date.now() - args.durationMs) },
-    context.active(),
+    // Parent under Mastra's active agent span so the retrieval hop joins the E2E
+    // trace instead of a detached root.
+    mastraParentContext(),
   );
 
   span.setAttribute("gen_ai.operation.name", "retrieve");
@@ -396,6 +682,16 @@ function emitRetrievalSpan(args: {
     );
   }
   span.end();
+
+  // Retrieval-hop latency as a first-class metric (labelled by index + outcome).
+  const inst = getInstruments();
+  if (inst) {
+    inst.duration.record(args.durationMs / 1000, {
+      "gen_ai.operation.name": "retrieve",
+      "db.collection.name": args.indexName,
+      "error.type": errorMetricLabel(args.error),
+    });
+  }
 }
 
 // The query method on a Mastra vector store: takes an object with

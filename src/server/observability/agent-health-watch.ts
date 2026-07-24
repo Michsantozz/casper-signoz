@@ -59,6 +59,16 @@ export async function runAgentHealthWatch(opts?: {
   const res = await agent.generate(WATCH_PROMPT);
   const summary = (res?.text ?? "").trim() || "Health check produced no output.";
 
+  // Force-flush the telemetry this pass emitted (LLM + the SRE-copilot's own
+  // tool_call spans). A cron tick can be short-lived; without this, the batch
+  // processors might not export before the run settles. No-op when SigNoz is off.
+  try {
+    const { flushLlmTelemetry } = await import("@/mastra/llm-telemetry");
+    await flushLlmTelemetry();
+  } catch {
+    /* flush is best-effort */
+  }
+
   if (!notify) {
     return { ran: true, summary, notified: 0 };
   }

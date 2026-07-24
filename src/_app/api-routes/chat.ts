@@ -278,6 +278,18 @@ export async function POST(req: Request) {
     } catch {
       /* quality scoring is best-effort */
     }
+    // Flush the LLM/tool/retrieval/eval spans + metrics this turn produced. The
+    // BatchSpanProcessor/PeriodicMetricReader flush on their own timers, but a
+    // forced flush here — inside after(), off the response hot path — guarantees
+    // the turn's telemetry lands promptly (matters for a live demo where the last
+    // call must show up immediately, not on the next ~5s/10s tick). No-op when
+    // SigNoz is off.
+    try {
+      const { flushLlmTelemetry } = await import("@/mastra/llm-telemetry");
+      await flushLlmTelemetry();
+    } catch {
+      /* flush is best-effort */
+    }
   };
 
   // Prefer `after()`: it keeps the drain alive past the response on the
