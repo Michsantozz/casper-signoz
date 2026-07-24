@@ -1,0 +1,82 @@
+{
+  "alert": "CasperAgent — LLM p95 latency (metric)",
+  "alertType": "METRIC_BASED_ALERT",
+  "ruleType": "threshold_rule",
+  "schemaVersion": "v2alpha1",
+  "description": "Metric-native twin of the traces-based p95-latency rule. Reads the first-class OTel histogram gen_ai.client.operation.duration (seconds) instead of aggregating duration_nano off spans. Filtered to the chat operation so it tracks LLM-call latency; threshold is in SECONDS (30s) — the histogram is exported in seconds, unlike the traces rule's nanoseconds.",
+  "condition": {
+    "compositeQuery": {
+      "queries": [
+        {
+          "type": "builder_query",
+          "spec": {
+            "name": "A",
+            "signal": "metrics",
+            "stepInterval": 60,
+            "disabled": false,
+            "filter": {
+              "expression": "gen_ai.operation.name = 'chat'"
+            },
+            "having": {
+              "expression": ""
+            },
+            "aggregations": [
+              {
+                "metricName": "gen_ai.client.operation.duration",
+                "timeAggregation": "p95",
+                "spaceAggregation": "p95"
+              }
+            ]
+          }
+        }
+      ],
+      "panelType": "graph",
+      "queryType": "builder",
+      "unit": "s"
+    },
+    "selectedQueryName": "A",
+    "thresholds": {
+      "kind": "basic",
+      "spec": [
+        {
+          "name": "critical",
+          "target": 30,
+          "matchType": "at_least_once",
+          "op": "above",
+          "channels": [
+            "casper-default"
+          ]
+        }
+      ]
+    }
+  },
+  "labels": {
+    "severity": "warning",
+    "component": "llm",
+    "kind": "latency",
+    "source": "metric"
+  },
+  "annotations": {
+    "summary": "LLM p95 latency above {{$threshold}}s in window (metric)",
+    "description": "Native duration histogram p95 reached {{$value}}s over the evaluation window."
+  },
+  "evaluation": {
+    "kind": "rolling",
+    "spec": {
+      "evalWindow": "5m",
+      "frequency": "1m"
+    }
+  },
+  "notificationSettings": {
+    "groupBy": [],
+    "renotify": {
+      "enabled": true,
+      "interval": "2h",
+      "alertStates": [
+        "firing"
+      ]
+    },
+    "usePolicy": false
+  },
+  "disabled": false
+}

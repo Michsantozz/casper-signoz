@@ -1,0 +1,82 @@
+{
+  "alert": "CasperAgent — LLM cost spike (metric)",
+  "alertType": "METRIC_BASED_ALERT",
+  "ruleType": "threshold_rule",
+  "schemaVersion": "v2alpha1",
+  "description": "Metric-native twin of the traces-based cost-spike rule. Fires on the REAL cost the app now exports as a first-class OTel metric (gen_ai.client.operation.cost, USD), so there is NO price-placeholder formula to maintain — the dollar value is computed app-side per span (LLM_PRICE_*_PER_MTOK) and summed here. Prefer this rule once the metrics pipeline is confirmed flowing; keep the traces-based one as a fallback for windows where only span attributes exist.",
+  "condition": {
+    "compositeQuery": {
+      "queries": [
+        {
+          "type": "builder_query",
+          "spec": {
+            "name": "A",
+            "signal": "metrics",
+            "stepInterval": 60,
+            "disabled": false,
+            "filter": {
+              "expression": ""
+            },
+            "having": {
+              "expression": ""
+            },
+            "aggregations": [
+              {
+                "metricName": "gen_ai.client.operation.cost",
+                "timeAggregation": "increase",
+                "spaceAggregation": "sum"
+              }
+            ]
+          }
+        }
+      ],
+      "panelType": "graph",
+      "queryType": "builder",
+      "unit": "none"
+    },
+    "selectedQueryName": "A",
+    "thresholds": {
+      "kind": "basic",
+      "spec": [
+        {
+          "name": "critical",
+          "target": 5,
+          "matchType": "at_least_once",
+          "op": "above",
+          "channels": [
+            "casper-default"
+          ]
+        }
+      ]
+    }
+  },
+  "labels": {
+    "severity": "warning",
+    "component": "llm",
+    "kind": "cost",
+    "source": "metric"
+  },
+  "annotations": {
+    "summary": "LLM cost above ${{$threshold}} in window (metric)",
+    "description": "Native cost metric reached ${{$value}} over the evaluation window."
+  },
+  "evaluation": {
+    "kind": "rolling",
+    "spec": {
+      "evalWindow": "5m",
+      "frequency": "1m"
+    }
+  },
+  "notificationSettings": {
+    "groupBy": [],
+    "renotify": {
+      "enabled": true,
+      "interval": "2h",
+      "alertStates": [
+        "firing"
+      ]
+    },
+    "usePolicy": false
+  },
+  "disabled": false
+}

@@ -1,922 +1,1132 @@
 {
-  "id": "casper-agent-llm-observability",
-  "locked": false,
-  "orgId": "",
-  "name": "CasperAgent — Agent & LLM Observability",
-  "tags": [
-    "casper",
-    "llm",
-    "agent",
-    "hackathon"
-  ],
-  "schemaVersion": "v6",
-  "source": "",
-  "spec": {
-    "display": {
-      "name": "CasperAgent — Agent & LLM Observability",
-      "description": "Agent-native observability for CasperAgent (Mastra + Fireworks) over OTLP traces. Built on the gen_ai.* semantic conventions the Mastra OtelExporter emits: gen_ai.request.model, gen_ai.usage.input_tokens/output_tokens, plus mastra.span.type. LLM panels filter on mastra.span.type = 'model_generation' (the exact discriminator our spans carry). COST is derived by formula (tokens x price) because the exporter does not emit a cost attribute — see the PRICE PLACEHOLDER note on the cost panels."
-    },
-    "variables": [],
-    "panels": {
-      "11111111-1111-1111-1111-111111111111": {
-        "kind": "Panel",
-        "spec": {
-          "display": {
-            "name": "LLM calls",
-            "description": "Total model generations (mastra.span.type = model_generation)."
-          },
-          "plugin": {
-            "kind": "signoz/NumberPanel",
-            "spec": {
-              "visualization": {
-                "timePreference": "global_time"
-              }
-            }
-          },
-          "queries": [
-            {
-              "kind": "scalar",
-              "spec": {
-                "plugin": {
-                  "kind": "signoz/CompositeQuery",
-                  "spec": {
-                    "queries": [
-                      {
-                        "type": "builder_query",
-                        "spec": {
-                          "name": "A",
-                          "signal": "traces",
-                          "stepInterval": 60,
-                          "disabled": false,
-                          "filter": {
-                            "expression": "mastra.span.type = 'model_generation'"
-                          },
-                          "having": {
-                            "expression": ""
-                          },
-                          "aggregations": [
-                            {
-                              "expression": "count()"
-                            }
-                          ]
-                        }
-                      }
-                    ]
-                  }
-                }
-              }
-            }
-          ]
-        }
-      },
-      "22222222-2222-2222-2222-222222222222": {
-        "kind": "Panel",
-        "spec": {
-          "display": {
-            "name": "Total tokens",
-            "description": "Sum of input + output tokens across all model generations."
-          },
-          "plugin": {
-            "kind": "signoz/NumberPanel",
-            "spec": {
-              "visualization": {
-                "timePreference": "global_time"
-              }
-            }
-          },
-          "queries": [
-            {
-              "kind": "scalar",
-              "spec": {
-                "plugin": {
-                  "kind": "signoz/CompositeQuery",
-                  "spec": {
-                    "queries": [
-                      {
-                        "type": "builder_query",
-                        "spec": {
-                          "name": "A",
-                          "signal": "traces",
-                          "stepInterval": 60,
-                          "disabled": false,
-                          "filter": {
-                            "expression": "mastra.span.type = 'model_generation'"
-                          },
-                          "having": {
-                            "expression": ""
-                          },
-                          "aggregations": [
-                            {
-                              "expression": "sum(gen_ai.usage.input_tokens)"
-                            },
-                            {
-                              "expression": "sum(gen_ai.usage.output_tokens)"
-                            }
-                          ]
-                        }
-                      }
-                    ]
-                  }
-                }
-              }
-            }
-          ]
-        }
-      },
-      "33333333-3333-3333-3333-333333333333": {
-        "kind": "Panel",
-        "spec": {
-          "display": {
-            "name": "Est. cost (USD)",
-            "description": "Derived cost = input_tokens * PRICE_IN + output_tokens * PRICE_OUT. PRICE PLACEHOLDER: 0.0000009 USD/token (=$0.90 / 1M) for both, until real Fireworks glm-5p2 rates are set. Edit the two formula constants below to your actual per-token price."
-          },
-          "plugin": {
-            "kind": "signoz/NumberPanel",
-            "spec": {
-              "visualization": {
-                "timePreference": "global_time"
-              }
-            }
-          },
-          "queries": [
-            {
-              "kind": "scalar",
-              "spec": {
-                "plugin": {
-                  "kind": "signoz/CompositeQuery",
-                  "spec": {
-                    "queries": [
-                      {
-                        "type": "builder_query",
-                        "spec": {
-                          "name": "A",
-                          "signal": "traces",
-                          "stepInterval": 60,
-                          "disabled": true,
-                          "filter": {
-                            "expression": "mastra.span.type = 'model_generation'"
-                          },
-                          "having": {
-                            "expression": ""
-                          },
-                          "aggregations": [
-                            {
-                              "expression": "sum(gen_ai.usage.input_tokens)"
-                            }
-                          ]
-                        }
-                      },
-                      {
-                        "type": "builder_query",
-                        "spec": {
-                          "name": "B",
-                          "signal": "traces",
-                          "stepInterval": 60,
-                          "disabled": true,
-                          "filter": {
-                            "expression": "mastra.span.type = 'model_generation'"
-                          },
-                          "having": {
-                            "expression": ""
-                          },
-                          "aggregations": [
-                            {
-                              "expression": "sum(gen_ai.usage.output_tokens)"
-                            }
-                          ]
-                        }
-                      },
-                      {
-                        "type": "builder_formula",
-                        "spec": {
-                          "name": "F1",
-                          "expression": "A * 0.0000009 + B * 0.0000009",
-                          "disabled": false,
-                          "legend": "est. cost (USD)"
-                        }
-                      }
-                    ]
-                  }
-                }
-              }
-            }
-          ]
-        }
-      },
-      "44444444-4444-4444-4444-444444444444": {
-        "kind": "Panel",
-        "spec": {
-          "display": {
-            "name": "p95 latency (LLM)",
-            "description": "p95 duration of model_generation spans."
-          },
-          "plugin": {
-            "kind": "signoz/NumberPanel",
-            "spec": {
-              "visualization": {
-                "timePreference": "global_time"
-              }
-            }
-          },
-          "queries": [
-            {
-              "kind": "scalar",
-              "spec": {
-                "plugin": {
-                  "kind": "signoz/CompositeQuery",
-                  "spec": {
-                    "queries": [
-                      {
-                        "type": "builder_query",
-                        "spec": {
-                          "name": "A",
-                          "signal": "traces",
-                          "stepInterval": 60,
-                          "disabled": false,
-                          "filter": {
-                            "expression": "mastra.span.type = 'model_generation'"
-                          },
-                          "having": {
-                            "expression": ""
-                          },
-                          "aggregations": [
-                            {
-                              "expression": "p95(duration_nano)"
-                            }
-                          ]
-                        }
-                      }
-                    ]
-                  }
-                }
-              }
-            }
-          ]
-        }
-      },
-      "55555555-5555-5555-5555-555555555555": {
-        "kind": "Panel",
-        "spec": {
-          "display": {
-            "name": "Tool calls",
-            "description": "Total tool executions (mastra.span.type = tool_call)."
-          },
-          "plugin": {
-            "kind": "signoz/NumberPanel",
-            "spec": {
-              "visualization": {
-                "timePreference": "global_time"
-              }
-            }
-          },
-          "queries": [
-            {
-              "kind": "scalar",
-              "spec": {
-                "plugin": {
-                  "kind": "signoz/CompositeQuery",
-                  "spec": {
-                    "queries": [
-                      {
-                        "type": "builder_query",
-                        "spec": {
-                          "name": "A",
-                          "signal": "traces",
-                          "stepInterval": 60,
-                          "disabled": false,
-                          "filter": {
-                            "expression": "mastra.span.type = 'tool_call'"
-                          },
-                          "having": {
-                            "expression": ""
-                          },
-                          "aggregations": [
-                            {
-                              "expression": "count()"
-                            }
-                          ]
-                        }
-                      }
-                    ]
-                  }
-                }
-              }
-            }
-          ]
-        }
-      },
-      "66666666-6666-6666-6666-666666666666": {
-        "kind": "Panel",
-        "spec": {
-          "display": {
-            "name": "Tokens over time by model",
-            "description": "Input + output tokens per gen_ai.request.model."
-          },
-          "plugin": {
-            "kind": "signoz/TimeSeriesPanel",
-            "spec": {
-              "visualization": {
-                "timePreference": "global_time"
-              }
-            }
-          },
-          "queries": [
-            {
-              "kind": "time_series",
-              "spec": {
-                "plugin": {
-                  "kind": "signoz/CompositeQuery",
-                  "spec": {
-                    "queries": [
-                      {
-                        "type": "builder_query",
-                        "spec": {
-                          "name": "A",
-                          "signal": "traces",
-                          "stepInterval": 60,
-                          "disabled": false,
-                          "filter": {
-                            "expression": "mastra.span.type = 'model_generation'"
-                          },
-                          "groupBy": [
-                            {
-                              "name": "gen_ai.request.model",
-                              "fieldDataType": "string",
-                              "fieldContext": "tag"
-                            }
-                          ],
-                          "legend": "in {{gen_ai.request.model}}",
-                          "having": {
-                            "expression": ""
-                          },
-                          "aggregations": [
-                            {
-                              "expression": "sum(gen_ai.usage.input_tokens)"
-                            }
-                          ]
-                        }
-                      },
-                      {
-                        "type": "builder_query",
-                        "spec": {
-                          "name": "B",
-                          "signal": "traces",
-                          "stepInterval": 60,
-                          "disabled": false,
-                          "filter": {
-                            "expression": "mastra.span.type = 'model_generation'"
-                          },
-                          "groupBy": [
-                            {
-                              "name": "gen_ai.request.model",
-                              "fieldDataType": "string",
-                              "fieldContext": "tag"
-                            }
-                          ],
-                          "legend": "out {{gen_ai.request.model}}",
-                          "having": {
-                            "expression": ""
-                          },
-                          "aggregations": [
-                            {
-                              "expression": "sum(gen_ai.usage.output_tokens)"
-                            }
-                          ]
-                        }
-                      }
-                    ]
-                  }
-                }
-              }
-            }
-          ]
-        }
-      },
-      "77777777-7777-7777-7777-777777777777": {
-        "kind": "Panel",
-        "spec": {
-          "display": {
-            "name": "Est. cost over time by model",
-            "description": "Derived cost per model. PRICE PLACEHOLDER 0.0000009 USD/token (=$0.90 / 1M) — replace with real Fireworks glm-5p2 rate in the F1 formula."
-          },
-          "plugin": {
-            "kind": "signoz/TimeSeriesPanel",
-            "spec": {
-              "visualization": {
-                "timePreference": "global_time"
-              }
-            }
-          },
-          "queries": [
-            {
-              "kind": "time_series",
-              "spec": {
-                "plugin": {
-                  "kind": "signoz/CompositeQuery",
-                  "spec": {
-                    "queries": [
-                      {
-                        "type": "builder_query",
-                        "spec": {
-                          "name": "A",
-                          "signal": "traces",
-                          "stepInterval": 60,
-                          "disabled": true,
-                          "filter": {
-                            "expression": "mastra.span.type = 'model_generation'"
-                          },
-                          "groupBy": [
-                            {
-                              "name": "gen_ai.request.model",
-                              "fieldDataType": "string",
-                              "fieldContext": "tag"
-                            }
-                          ],
-                          "having": {
-                            "expression": ""
-                          },
-                          "aggregations": [
-                            {
-                              "expression": "sum(gen_ai.usage.input_tokens)"
-                            }
-                          ]
-                        }
-                      },
-                      {
-                        "type": "builder_query",
-                        "spec": {
-                          "name": "B",
-                          "signal": "traces",
-                          "stepInterval": 60,
-                          "disabled": true,
-                          "filter": {
-                            "expression": "mastra.span.type = 'model_generation'"
-                          },
-                          "groupBy": [
-                            {
-                              "name": "gen_ai.request.model",
-                              "fieldDataType": "string",
-                              "fieldContext": "tag"
-                            }
-                          ],
-                          "having": {
-                            "expression": ""
-                          },
-                          "aggregations": [
-                            {
-                              "expression": "sum(gen_ai.usage.output_tokens)"
-                            }
-                          ]
-                        }
-                      },
-                      {
-                        "type": "builder_formula",
-                        "spec": {
-                          "name": "F1",
-                          "expression": "A * 0.0000009 + B * 0.0000009",
-                          "disabled": false,
-                          "legend": "cost {{gen_ai.request.model}}"
-                        }
-                      }
-                    ]
-                  }
-                }
-              }
-            }
-          ]
-        }
-      },
-      "88888888-8888-8888-8888-888888888888": {
-        "kind": "Panel",
-        "spec": {
-          "display": {
-            "name": "LLM latency (p50 / p95 / p99)",
-            "description": "Duration percentiles of model_generation spans over time."
-          },
-          "plugin": {
-            "kind": "signoz/TimeSeriesPanel",
-            "spec": {
-              "visualization": {
-                "timePreference": "global_time"
-              }
-            }
-          },
-          "queries": [
-            {
-              "kind": "time_series",
-              "spec": {
-                "plugin": {
-                  "kind": "signoz/CompositeQuery",
-                  "spec": {
-                    "queries": [
-                      {
-                        "type": "builder_query",
-                        "spec": {
-                          "name": "A",
-                          "signal": "traces",
-                          "stepInterval": 60,
-                          "disabled": false,
-                          "filter": {
-                            "expression": "mastra.span.type = 'model_generation'"
-                          },
-                          "legend": "p50",
-                          "having": {
-                            "expression": ""
-                          },
-                          "aggregations": [
-                            {
-                              "expression": "p50(duration_nano)"
-                            }
-                          ]
-                        }
-                      },
-                      {
-                        "type": "builder_query",
-                        "spec": {
-                          "name": "B",
-                          "signal": "traces",
-                          "stepInterval": 60,
-                          "disabled": false,
-                          "filter": {
-                            "expression": "mastra.span.type = 'model_generation'"
-                          },
-                          "legend": "p95",
-                          "having": {
-                            "expression": ""
-                          },
-                          "aggregations": [
-                            {
-                              "expression": "p95(duration_nano)"
-                            }
-                          ]
-                        }
-                      },
-                      {
-                        "type": "builder_query",
-                        "spec": {
-                          "name": "C",
-                          "signal": "traces",
-                          "stepInterval": 60,
-                          "disabled": false,
-                          "filter": {
-                            "expression": "mastra.span.type = 'model_generation'"
-                          },
-                          "legend": "p99",
-                          "having": {
-                            "expression": ""
-                          },
-                          "aggregations": [
-                            {
-                              "expression": "p99(duration_nano)"
-                            }
-                          ]
-                        }
-                      }
-                    ]
-                  }
-                }
-              }
-            }
-          ]
-        }
-      },
-      "99999999-9999-9999-9999-999999999999": {
-        "kind": "Panel",
-        "spec": {
-          "display": {
-            "name": "Calls by tool",
-            "description": "Tool executions grouped by gen_ai.tool.name."
-          },
-          "plugin": {
-            "kind": "signoz/TablePanel",
-            "spec": {
-              "visualization": {
-                "timePreference": "global_time"
-              }
-            }
-          },
-          "queries": [
-            {
-              "kind": "scalar",
-              "spec": {
-                "plugin": {
-                  "kind": "signoz/CompositeQuery",
-                  "spec": {
-                    "queries": [
-                      {
-                        "type": "builder_query",
-                        "spec": {
-                          "name": "A",
-                          "signal": "traces",
-                          "stepInterval": 60,
-                          "disabled": false,
-                          "filter": {
-                            "expression": "mastra.span.type = 'tool_call'"
-                          },
-                          "groupBy": [
-                            {
-                              "name": "gen_ai.tool.name",
-                              "fieldDataType": "string",
-                              "fieldContext": "tag"
-                            }
-                          ],
-                          "legend": "{{gen_ai.tool.name}}",
-                          "having": {
-                            "expression": ""
-                          },
-                          "aggregations": [
-                            {
-                              "expression": "count()"
-                            }
-                          ]
-                        }
-                      }
-                    ]
-                  }
-                }
-              }
-            }
-          ]
-        }
-      },
-      "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa": {
-        "kind": "Panel",
-        "spec": {
-          "display": {
-            "name": "Errors by type",
-            "description": "Spans carrying error.type (agent/tool/LLM failures), grouped."
-          },
-          "plugin": {
-            "kind": "signoz/TablePanel",
-            "spec": {
-              "visualization": {
-                "timePreference": "global_time"
-              }
-            }
-          },
-          "queries": [
-            {
-              "kind": "scalar",
-              "spec": {
-                "plugin": {
-                  "kind": "signoz/CompositeQuery",
-                  "spec": {
-                    "queries": [
-                      {
-                        "type": "builder_query",
-                        "spec": {
-                          "name": "A",
-                          "signal": "traces",
-                          "stepInterval": 60,
-                          "disabled": false,
-                          "filter": {
-                            "expression": "error.type EXISTS"
-                          },
-                          "groupBy": [
-                            {
-                              "name": "error.type",
-                              "fieldDataType": "string",
-                              "fieldContext": "tag"
-                            }
-                          ],
-                          "legend": "{{error.type}}",
-                          "having": {
-                            "expression": ""
-                          },
-                          "aggregations": [
-                            {
-                              "expression": "count()"
-                            }
-                          ]
-                        }
-                      }
-                    ]
-                  }
-                }
-              }
-            }
-          ]
-        }
-      },
-      "bbbbbbbb-0000-0000-0000-0000000000q1": {
-        "kind": "Panel",
-        "spec": {
-          "display": {
-            "name": "Answer quality (avg completeness)",
-            "description": "Deterministic completeness score of the agent's answers (0..1), zero-LLM. mastra.span.type = eval."
-          },
-          "plugin": {
-            "kind": "signoz/NumberPanel",
-            "spec": {
-              "visualization": {
-                "timePreference": "global_time"
-              }
-            }
-          },
-          "queries": [
-            {
-              "kind": "scalar",
-              "spec": {
-                "plugin": {
-                  "kind": "signoz/CompositeQuery",
-                  "spec": {
-                    "queries": [
-                      {
-                        "type": "builder_query",
-                        "spec": {
-                          "name": "A",
-                          "signal": "traces",
-                          "stepInterval": 60,
-                          "disabled": false,
-                          "filter": {
-                            "expression": "mastra.span.type = 'eval'"
-                          },
-                          "having": {
-                            "expression": ""
-                          },
-                          "aggregations": [
-                            {
-                              "expression": "avg(mastra.eval.score)"
-                            }
-                          ]
-                        }
-                      }
-                    ]
-                  }
-                }
-              }
-            }
-          ]
-        }
-      },
-      "bbbbbbbb-0000-0000-0000-0000000000q2": {
-        "kind": "Panel",
-        "spec": {
-          "display": {
-            "name": "Answer quality over time",
-            "description": "avg completeness score per interval — the third axis: is the agent's answer quality drifting?"
-          },
-          "plugin": {
-            "kind": "signoz/TimeSeriesPanel",
-            "spec": {
-              "visualization": {
-                "timePreference": "global_time"
-              }
-            }
-          },
-          "queries": [
-            {
-              "kind": "time_series",
-              "spec": {
-                "plugin": {
-                  "kind": "signoz/CompositeQuery",
-                  "spec": {
-                    "queries": [
-                      {
-                        "type": "builder_query",
-                        "spec": {
-                          "name": "A",
-                          "signal": "traces",
-                          "stepInterval": 60,
-                          "disabled": false,
-                          "filter": {
-                            "expression": "mastra.span.type = 'eval'"
-                          },
-                          "having": {
-                            "expression": ""
-                          },
-                          "aggregations": [
-                            {
-                              "expression": "avg(mastra.eval.score)"
-                            }
-                          ]
-                        }
-                      }
-                    ]
-                  }
-                }
-              }
-            }
-          ]
-        }
+ "id": "casper-agent-llm-observability",
+ "locked": false,
+ "orgId": "",
+ "name": "CasperAgent \u2014 Agent & LLM Observability",
+ "tags": [
+  "casper",
+  "llm",
+  "agent",
+  "hackathon"
+ ],
+ "schemaVersion": "v6",
+ "source": "",
+ "spec": {
+  "display": {
+   "name": "CasperAgent \u2014 Agent & LLM Observability",
+   "description": "Agent-native observability for CasperAgent (Mastra + Fireworks) over OTLP traces. Built on the gen_ai.* semantic conventions the Mastra OtelExporter emits: gen_ai.request.model, gen_ai.usage.input_tokens/output_tokens, plus mastra.span.type. LLM panels filter on mastra.span.type = 'model_generation' (the exact discriminator our spans carry). COST is derived by formula (tokens x price) because the exporter does not emit a cost attribute \u2014 see the PRICE PLACEHOLDER note on the cost panels."
+  },
+  "variables": [],
+  "panels": {
+   "11111111-1111-1111-1111-111111111111": {
+    "kind": "Panel",
+    "spec": {
+     "display": {
+      "name": "LLM calls",
+      "description": "Total model generations (mastra.span.type = model_generation)."
+     },
+     "plugin": {
+      "kind": "signoz/NumberPanel",
+      "spec": {
+       "visualization": {
+        "timePreference": "global_time"
+       }
       }
-    },
-    "layouts": [
+     },
+     "queries": [
       {
-        "kind": "Grid",
-        "spec": {
-          "items": [
-            {
-              "x": 0,
-              "y": 0,
-              "width": 2,
-              "height": 3,
-              "content": {
-                "$ref": "#/spec/panels/11111111-1111-1111-1111-111111111111"
+       "kind": "scalar",
+       "spec": {
+        "plugin": {
+         "kind": "signoz/CompositeQuery",
+         "spec": {
+          "queries": [
+           {
+            "type": "builder_query",
+            "spec": {
+             "name": "A",
+             "signal": "traces",
+             "stepInterval": 60,
+             "disabled": false,
+             "filter": {
+              "expression": "mastra.span.type = 'model_generation'"
+             },
+             "having": {
+              "expression": ""
+             },
+             "aggregations": [
+              {
+               "expression": "count()"
               }
-            },
-            {
-              "x": 2,
-              "y": 0,
-              "width": 3,
-              "height": 3,
-              "content": {
-                "$ref": "#/spec/panels/22222222-2222-2222-2222-222222222222"
-              }
-            },
-            {
-              "x": 5,
-              "y": 0,
-              "width": 3,
-              "height": 3,
-              "content": {
-                "$ref": "#/spec/panels/33333333-3333-3333-3333-333333333333"
-              }
-            },
-            {
-              "x": 8,
-              "y": 0,
-              "width": 2,
-              "height": 3,
-              "content": {
-                "$ref": "#/spec/panels/44444444-4444-4444-4444-444444444444"
-              }
-            },
-            {
-              "x": 10,
-              "y": 0,
-              "width": 2,
-              "height": 3,
-              "content": {
-                "$ref": "#/spec/panels/55555555-5555-5555-5555-555555555555"
-              }
-            },
-            {
-              "x": 0,
-              "y": 3,
-              "width": 6,
-              "height": 5,
-              "content": {
-                "$ref": "#/spec/panels/66666666-6666-6666-6666-666666666666"
-              }
-            },
-            {
-              "x": 6,
-              "y": 3,
-              "width": 6,
-              "height": 5,
-              "content": {
-                "$ref": "#/spec/panels/77777777-7777-7777-7777-777777777777"
-              }
-            },
-            {
-              "x": 0,
-              "y": 8,
-              "width": 12,
-              "height": 5,
-              "content": {
-                "$ref": "#/spec/panels/88888888-8888-8888-8888-888888888888"
-              }
-            },
-            {
-              "x": 0,
-              "y": 13,
-              "width": 6,
-              "height": 5,
-              "content": {
-                "$ref": "#/spec/panels/99999999-9999-9999-9999-999999999999"
-              }
-            },
-            {
-              "x": 6,
-              "y": 13,
-              "width": 6,
-              "height": 5,
-              "content": {
-                "$ref": "#/spec/panels/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
-              }
-            },
-            {
-              "x": 0,
-              "y": 18,
-              "width": 2,
-              "height": 3,
-              "content": {
-                "$ref": "#/spec/panels/bbbbbbbb-0000-0000-0000-0000000000q1"
-              }
-            },
-            {
-              "x": 2,
-              "y": 18,
-              "width": 6,
-              "height": 3,
-              "content": {
-                "$ref": "#/spec/panels/bbbbbbbb-0000-0000-0000-0000000000q2"
-              }
+             ]
             }
+           }
           ]
+         }
         }
+       }
       }
-    ]
-  }
+     ]
+    }
+   },
+   "22222222-2222-2222-2222-222222222222": {
+    "kind": "Panel",
+    "spec": {
+     "display": {
+      "name": "Total tokens",
+      "description": "Sum of input + output tokens across all model generations."
+     },
+     "plugin": {
+      "kind": "signoz/NumberPanel",
+      "spec": {
+       "visualization": {
+        "timePreference": "global_time"
+       }
+      }
+     },
+     "queries": [
+      {
+       "kind": "scalar",
+       "spec": {
+        "plugin": {
+         "kind": "signoz/CompositeQuery",
+         "spec": {
+          "queries": [
+           {
+            "type": "builder_query",
+            "spec": {
+             "name": "A",
+             "signal": "traces",
+             "stepInterval": 60,
+             "disabled": false,
+             "filter": {
+              "expression": "mastra.span.type = 'model_generation'"
+             },
+             "having": {
+              "expression": ""
+             },
+             "aggregations": [
+              {
+               "expression": "sum(gen_ai.usage.input_tokens)"
+              },
+              {
+               "expression": "sum(gen_ai.usage.output_tokens)"
+              }
+             ]
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     ]
+    }
+   },
+   "33333333-3333-3333-3333-333333333333": {
+    "kind": "Panel",
+    "spec": {
+     "display": {
+      "name": "Est. cost (USD)",
+      "description": "Derived cost = input_tokens * PRICE_IN + output_tokens * PRICE_OUT. PRICE PLACEHOLDER: 0.0000009 USD/token (=$0.90 / 1M) for both, until real Fireworks glm-5p2 rates are set. Edit the two formula constants below to your actual per-token price."
+     },
+     "plugin": {
+      "kind": "signoz/NumberPanel",
+      "spec": {
+       "visualization": {
+        "timePreference": "global_time"
+       }
+      }
+     },
+     "queries": [
+      {
+       "kind": "scalar",
+       "spec": {
+        "plugin": {
+         "kind": "signoz/CompositeQuery",
+         "spec": {
+          "queries": [
+           {
+            "type": "builder_query",
+            "spec": {
+             "name": "A",
+             "signal": "traces",
+             "stepInterval": 60,
+             "disabled": true,
+             "filter": {
+              "expression": "mastra.span.type = 'model_generation'"
+             },
+             "having": {
+              "expression": ""
+             },
+             "aggregations": [
+              {
+               "expression": "sum(gen_ai.usage.input_tokens)"
+              }
+             ]
+            }
+           },
+           {
+            "type": "builder_query",
+            "spec": {
+             "name": "B",
+             "signal": "traces",
+             "stepInterval": 60,
+             "disabled": true,
+             "filter": {
+              "expression": "mastra.span.type = 'model_generation'"
+             },
+             "having": {
+              "expression": ""
+             },
+             "aggregations": [
+              {
+               "expression": "sum(gen_ai.usage.output_tokens)"
+              }
+             ]
+            }
+           },
+           {
+            "type": "builder_formula",
+            "spec": {
+             "name": "F1",
+             "expression": "A * 0.0000009 + B * 0.0000009",
+             "disabled": false,
+             "legend": "est. cost (USD)"
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     ]
+    }
+   },
+   "44444444-4444-4444-4444-444444444444": {
+    "kind": "Panel",
+    "spec": {
+     "display": {
+      "name": "p95 latency (LLM)",
+      "description": "p95 duration of model_generation spans."
+     },
+     "plugin": {
+      "kind": "signoz/NumberPanel",
+      "spec": {
+       "visualization": {
+        "timePreference": "global_time"
+       }
+      }
+     },
+     "queries": [
+      {
+       "kind": "scalar",
+       "spec": {
+        "plugin": {
+         "kind": "signoz/CompositeQuery",
+         "spec": {
+          "queries": [
+           {
+            "type": "builder_query",
+            "spec": {
+             "name": "A",
+             "signal": "traces",
+             "stepInterval": 60,
+             "disabled": false,
+             "filter": {
+              "expression": "mastra.span.type = 'model_generation'"
+             },
+             "having": {
+              "expression": ""
+             },
+             "aggregations": [
+              {
+               "expression": "p95(duration_nano)"
+              }
+             ]
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     ]
+    }
+   },
+   "55555555-5555-5555-5555-555555555555": {
+    "kind": "Panel",
+    "spec": {
+     "display": {
+      "name": "Tool calls",
+      "description": "Total tool executions (mastra.span.type = tool_call)."
+     },
+     "plugin": {
+      "kind": "signoz/NumberPanel",
+      "spec": {
+       "visualization": {
+        "timePreference": "global_time"
+       }
+      }
+     },
+     "queries": [
+      {
+       "kind": "scalar",
+       "spec": {
+        "plugin": {
+         "kind": "signoz/CompositeQuery",
+         "spec": {
+          "queries": [
+           {
+            "type": "builder_query",
+            "spec": {
+             "name": "A",
+             "signal": "traces",
+             "stepInterval": 60,
+             "disabled": false,
+             "filter": {
+              "expression": "mastra.span.type = 'tool_call'"
+             },
+             "having": {
+              "expression": ""
+             },
+             "aggregations": [
+              {
+               "expression": "count()"
+              }
+             ]
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     ]
+    }
+   },
+   "66666666-6666-6666-6666-666666666666": {
+    "kind": "Panel",
+    "spec": {
+     "display": {
+      "name": "Tokens over time by model",
+      "description": "Input + output tokens per gen_ai.request.model."
+     },
+     "plugin": {
+      "kind": "signoz/TimeSeriesPanel",
+      "spec": {
+       "visualization": {
+        "timePreference": "global_time"
+       }
+      }
+     },
+     "queries": [
+      {
+       "kind": "time_series",
+       "spec": {
+        "plugin": {
+         "kind": "signoz/CompositeQuery",
+         "spec": {
+          "queries": [
+           {
+            "type": "builder_query",
+            "spec": {
+             "name": "A",
+             "signal": "traces",
+             "stepInterval": 60,
+             "disabled": false,
+             "filter": {
+              "expression": "mastra.span.type = 'model_generation'"
+             },
+             "groupBy": [
+              {
+               "name": "gen_ai.request.model",
+               "fieldDataType": "string",
+               "fieldContext": "tag"
+              }
+             ],
+             "legend": "in {{gen_ai.request.model}}",
+             "having": {
+              "expression": ""
+             },
+             "aggregations": [
+              {
+               "expression": "sum(gen_ai.usage.input_tokens)"
+              }
+             ]
+            }
+           },
+           {
+            "type": "builder_query",
+            "spec": {
+             "name": "B",
+             "signal": "traces",
+             "stepInterval": 60,
+             "disabled": false,
+             "filter": {
+              "expression": "mastra.span.type = 'model_generation'"
+             },
+             "groupBy": [
+              {
+               "name": "gen_ai.request.model",
+               "fieldDataType": "string",
+               "fieldContext": "tag"
+              }
+             ],
+             "legend": "out {{gen_ai.request.model}}",
+             "having": {
+              "expression": ""
+             },
+             "aggregations": [
+              {
+               "expression": "sum(gen_ai.usage.output_tokens)"
+              }
+             ]
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     ]
+    }
+   },
+   "77777777-7777-7777-7777-777777777777": {
+    "kind": "Panel",
+    "spec": {
+     "display": {
+      "name": "Est. cost over time by model",
+      "description": "Derived cost per model. PRICE PLACEHOLDER 0.0000009 USD/token (=$0.90 / 1M) \u2014 replace with real Fireworks glm-5p2 rate in the F1 formula."
+     },
+     "plugin": {
+      "kind": "signoz/TimeSeriesPanel",
+      "spec": {
+       "visualization": {
+        "timePreference": "global_time"
+       }
+      }
+     },
+     "queries": [
+      {
+       "kind": "time_series",
+       "spec": {
+        "plugin": {
+         "kind": "signoz/CompositeQuery",
+         "spec": {
+          "queries": [
+           {
+            "type": "builder_query",
+            "spec": {
+             "name": "A",
+             "signal": "traces",
+             "stepInterval": 60,
+             "disabled": true,
+             "filter": {
+              "expression": "mastra.span.type = 'model_generation'"
+             },
+             "groupBy": [
+              {
+               "name": "gen_ai.request.model",
+               "fieldDataType": "string",
+               "fieldContext": "tag"
+              }
+             ],
+             "having": {
+              "expression": ""
+             },
+             "aggregations": [
+              {
+               "expression": "sum(gen_ai.usage.input_tokens)"
+              }
+             ]
+            }
+           },
+           {
+            "type": "builder_query",
+            "spec": {
+             "name": "B",
+             "signal": "traces",
+             "stepInterval": 60,
+             "disabled": true,
+             "filter": {
+              "expression": "mastra.span.type = 'model_generation'"
+             },
+             "groupBy": [
+              {
+               "name": "gen_ai.request.model",
+               "fieldDataType": "string",
+               "fieldContext": "tag"
+              }
+             ],
+             "having": {
+              "expression": ""
+             },
+             "aggregations": [
+              {
+               "expression": "sum(gen_ai.usage.output_tokens)"
+              }
+             ]
+            }
+           },
+           {
+            "type": "builder_formula",
+            "spec": {
+             "name": "F1",
+             "expression": "A * 0.0000009 + B * 0.0000009",
+             "disabled": false,
+             "legend": "cost {{gen_ai.request.model}}"
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     ]
+    }
+   },
+   "88888888-8888-8888-8888-888888888888": {
+    "kind": "Panel",
+    "spec": {
+     "display": {
+      "name": "LLM latency (p50 / p95 / p99)",
+      "description": "Duration percentiles of model_generation spans over time."
+     },
+     "plugin": {
+      "kind": "signoz/TimeSeriesPanel",
+      "spec": {
+       "visualization": {
+        "timePreference": "global_time"
+       }
+      }
+     },
+     "queries": [
+      {
+       "kind": "time_series",
+       "spec": {
+        "plugin": {
+         "kind": "signoz/CompositeQuery",
+         "spec": {
+          "queries": [
+           {
+            "type": "builder_query",
+            "spec": {
+             "name": "A",
+             "signal": "traces",
+             "stepInterval": 60,
+             "disabled": false,
+             "filter": {
+              "expression": "mastra.span.type = 'model_generation'"
+             },
+             "legend": "p50",
+             "having": {
+              "expression": ""
+             },
+             "aggregations": [
+              {
+               "expression": "p50(duration_nano)"
+              }
+             ]
+            }
+           },
+           {
+            "type": "builder_query",
+            "spec": {
+             "name": "B",
+             "signal": "traces",
+             "stepInterval": 60,
+             "disabled": false,
+             "filter": {
+              "expression": "mastra.span.type = 'model_generation'"
+             },
+             "legend": "p95",
+             "having": {
+              "expression": ""
+             },
+             "aggregations": [
+              {
+               "expression": "p95(duration_nano)"
+              }
+             ]
+            }
+           },
+           {
+            "type": "builder_query",
+            "spec": {
+             "name": "C",
+             "signal": "traces",
+             "stepInterval": 60,
+             "disabled": false,
+             "filter": {
+              "expression": "mastra.span.type = 'model_generation'"
+             },
+             "legend": "p99",
+             "having": {
+              "expression": ""
+             },
+             "aggregations": [
+              {
+               "expression": "p99(duration_nano)"
+              }
+             ]
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     ]
+    }
+   },
+   "99999999-9999-9999-9999-999999999999": {
+    "kind": "Panel",
+    "spec": {
+     "display": {
+      "name": "Calls by tool",
+      "description": "Tool executions grouped by gen_ai.tool.name."
+     },
+     "plugin": {
+      "kind": "signoz/TablePanel",
+      "spec": {
+       "visualization": {
+        "timePreference": "global_time"
+       }
+      }
+     },
+     "queries": [
+      {
+       "kind": "scalar",
+       "spec": {
+        "plugin": {
+         "kind": "signoz/CompositeQuery",
+         "spec": {
+          "queries": [
+           {
+            "type": "builder_query",
+            "spec": {
+             "name": "A",
+             "signal": "traces",
+             "stepInterval": 60,
+             "disabled": false,
+             "filter": {
+              "expression": "mastra.span.type = 'tool_call'"
+             },
+             "groupBy": [
+              {
+               "name": "gen_ai.tool.name",
+               "fieldDataType": "string",
+               "fieldContext": "tag"
+              }
+             ],
+             "legend": "{{gen_ai.tool.name}}",
+             "having": {
+              "expression": ""
+             },
+             "aggregations": [
+              {
+               "expression": "count()"
+              }
+             ]
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     ]
+    }
+   },
+   "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa": {
+    "kind": "Panel",
+    "spec": {
+     "display": {
+      "name": "Errors by type",
+      "description": "Spans carrying error.type (agent/tool/LLM failures), grouped."
+     },
+     "plugin": {
+      "kind": "signoz/TablePanel",
+      "spec": {
+       "visualization": {
+        "timePreference": "global_time"
+       }
+      }
+     },
+     "queries": [
+      {
+       "kind": "scalar",
+       "spec": {
+        "plugin": {
+         "kind": "signoz/CompositeQuery",
+         "spec": {
+          "queries": [
+           {
+            "type": "builder_query",
+            "spec": {
+             "name": "A",
+             "signal": "traces",
+             "stepInterval": 60,
+             "disabled": false,
+             "filter": {
+              "expression": "error.type EXISTS"
+             },
+             "groupBy": [
+              {
+               "name": "error.type",
+               "fieldDataType": "string",
+               "fieldContext": "tag"
+              }
+             ],
+             "legend": "{{error.type}}",
+             "having": {
+              "expression": ""
+             },
+             "aggregations": [
+              {
+               "expression": "count()"
+              }
+             ]
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     ]
+    }
+   },
+   "bbbbbbbb-0000-0000-0000-0000000000q1": {
+    "kind": "Panel",
+    "spec": {
+     "display": {
+      "name": "Answer quality (avg completeness)",
+      "description": "Deterministic completeness score of the agent's answers (0..1), zero-LLM. mastra.span.type = eval."
+     },
+     "plugin": {
+      "kind": "signoz/NumberPanel",
+      "spec": {
+       "visualization": {
+        "timePreference": "global_time"
+       }
+      }
+     },
+     "queries": [
+      {
+       "kind": "scalar",
+       "spec": {
+        "plugin": {
+         "kind": "signoz/CompositeQuery",
+         "spec": {
+          "queries": [
+           {
+            "type": "builder_query",
+            "spec": {
+             "name": "A",
+             "signal": "traces",
+             "stepInterval": 60,
+             "disabled": false,
+             "filter": {
+              "expression": "mastra.span.type = 'eval'"
+             },
+             "having": {
+              "expression": ""
+             },
+             "aggregations": [
+              {
+               "expression": "avg(mastra.eval.score)"
+              }
+             ]
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     ]
+    }
+   },
+   "bbbbbbbb-0000-0000-0000-0000000000q2": {
+    "kind": "Panel",
+    "spec": {
+     "display": {
+      "name": "Answer quality over time",
+      "description": "avg completeness score per interval \u2014 the third axis: is the agent's answer quality drifting?"
+     },
+     "plugin": {
+      "kind": "signoz/TimeSeriesPanel",
+      "spec": {
+       "visualization": {
+        "timePreference": "global_time"
+       }
+      }
+     },
+     "queries": [
+      {
+       "kind": "time_series",
+       "spec": {
+        "plugin": {
+         "kind": "signoz/CompositeQuery",
+         "spec": {
+          "queries": [
+           {
+            "type": "builder_query",
+            "spec": {
+             "name": "A",
+             "signal": "traces",
+             "stepInterval": 60,
+             "disabled": false,
+             "filter": {
+              "expression": "mastra.span.type = 'eval'"
+             },
+             "having": {
+              "expression": ""
+             },
+             "aggregations": [
+              {
+               "expression": "avg(mastra.eval.score)"
+              }
+             ]
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     ]
+    }
+   },
+   "cccccccc-0000-0000-0000-00000000m001": {
+    "kind": "Panel",
+    "spec": {
+     "display": {
+      "name": "Token rate (metric) by type",
+      "description": "gen_ai.client.token.usage counter, rate/s, grouped by gen_ai.token.type. First-class OTel metric (not a trace attribute)."
+     },
+     "plugin": {
+      "kind": "signoz/TimeSeriesPanel",
+      "spec": {
+       "visualization": {
+        "timePreference": "global_time"
+       }
+      }
+     },
+     "queries": [
+      {
+       "kind": "time_series",
+       "spec": {
+        "plugin": {
+         "kind": "signoz/CompositeQuery",
+         "spec": {
+          "queries": [
+           {
+            "type": "builder_query",
+            "spec": {
+             "name": "A",
+             "signal": "metrics",
+             "stepInterval": 60,
+             "disabled": false,
+             "filter": {
+              "expression": ""
+             },
+             "having": {
+              "expression": ""
+             },
+             "aggregations": [
+              {
+               "metricName": "gen_ai.client.token.usage",
+               "timeAggregation": "rate",
+               "spaceAggregation": "sum"
+              }
+             ],
+             "groupBy": [
+              {
+               "name": "gen_ai.token.type",
+               "fieldDataType": "string",
+               "fieldContext": "tag"
+              }
+             ],
+             "legend": "{{gen_ai.token.type}}"
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     ]
+    }
+   },
+   "cccccccc-0000-0000-0000-00000000m002": {
+    "kind": "Panel",
+    "spec": {
+     "display": {
+      "name": "LLM cost (metric) by model",
+      "description": "gen_ai.client.operation.cost counter (USD), increase, grouped by model. Native metric \u2014 enables PromQL/metric alerts on spend."
+     },
+     "plugin": {
+      "kind": "signoz/TimeSeriesPanel",
+      "spec": {
+       "visualization": {
+        "timePreference": "global_time"
+       }
+      }
+     },
+     "queries": [
+      {
+       "kind": "time_series",
+       "spec": {
+        "plugin": {
+         "kind": "signoz/CompositeQuery",
+         "spec": {
+          "queries": [
+           {
+            "type": "builder_query",
+            "spec": {
+             "name": "A",
+             "signal": "metrics",
+             "stepInterval": 60,
+             "disabled": false,
+             "filter": {
+              "expression": ""
+             },
+             "having": {
+              "expression": ""
+             },
+             "aggregations": [
+              {
+               "metricName": "gen_ai.client.operation.cost",
+               "timeAggregation": "increase",
+               "spaceAggregation": "sum"
+              }
+             ],
+             "groupBy": [
+              {
+               "name": "gen_ai.request.model",
+               "fieldDataType": "string",
+               "fieldContext": "tag"
+              }
+             ],
+             "legend": "{{gen_ai.request.model}}"
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     ]
+    }
+   },
+   "cccccccc-0000-0000-0000-00000000m003": {
+    "kind": "Panel",
+    "spec": {
+     "display": {
+      "name": "Operation p95 latency (metric histogram)",
+      "description": "gen_ai.client.operation.duration histogram, p95, grouped by gen_ai.operation.name (chat / execute_tool / retrieve)."
+     },
+     "plugin": {
+      "kind": "signoz/TimeSeriesPanel",
+      "spec": {
+       "visualization": {
+        "timePreference": "global_time"
+       }
+      }
+     },
+     "queries": [
+      {
+       "kind": "time_series",
+       "spec": {
+        "plugin": {
+         "kind": "signoz/CompositeQuery",
+         "spec": {
+          "queries": [
+           {
+            "type": "builder_query",
+            "spec": {
+             "name": "A",
+             "signal": "metrics",
+             "stepInterval": 60,
+             "disabled": false,
+             "filter": {
+              "expression": ""
+             },
+             "having": {
+              "expression": ""
+             },
+             "aggregations": [
+              {
+               "metricName": "gen_ai.client.operation.duration",
+               "timeAggregation": "p95",
+               "spaceAggregation": "sum"
+              }
+             ],
+             "groupBy": [
+              {
+               "name": "gen_ai.operation.name",
+               "fieldDataType": "string",
+               "fieldContext": "tag"
+              }
+             ],
+             "legend": "p95 {{gen_ai.operation.name}}"
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     ]
+    }
+   }
+  },
+  "layouts": [
+   {
+    "kind": "Grid",
+    "spec": {
+     "items": [
+      {
+       "x": 0,
+       "y": 0,
+       "width": 2,
+       "height": 3,
+       "content": {
+        "$ref": "#/spec/panels/11111111-1111-1111-1111-111111111111"
+       }
+      },
+      {
+       "x": 2,
+       "y": 0,
+       "width": 3,
+       "height": 3,
+       "content": {
+        "$ref": "#/spec/panels/22222222-2222-2222-2222-222222222222"
+       }
+      },
+      {
+       "x": 5,
+       "y": 0,
+       "width": 3,
+       "height": 3,
+       "content": {
+        "$ref": "#/spec/panels/33333333-3333-3333-3333-333333333333"
+       }
+      },
+      {
+       "x": 8,
+       "y": 0,
+       "width": 2,
+       "height": 3,
+       "content": {
+        "$ref": "#/spec/panels/44444444-4444-4444-4444-444444444444"
+       }
+      },
+      {
+       "x": 10,
+       "y": 0,
+       "width": 2,
+       "height": 3,
+       "content": {
+        "$ref": "#/spec/panels/55555555-5555-5555-5555-555555555555"
+       }
+      },
+      {
+       "x": 0,
+       "y": 3,
+       "width": 6,
+       "height": 5,
+       "content": {
+        "$ref": "#/spec/panels/66666666-6666-6666-6666-666666666666"
+       }
+      },
+      {
+       "x": 6,
+       "y": 3,
+       "width": 6,
+       "height": 5,
+       "content": {
+        "$ref": "#/spec/panels/77777777-7777-7777-7777-777777777777"
+       }
+      },
+      {
+       "x": 0,
+       "y": 8,
+       "width": 12,
+       "height": 5,
+       "content": {
+        "$ref": "#/spec/panels/88888888-8888-8888-8888-888888888888"
+       }
+      },
+      {
+       "x": 0,
+       "y": 13,
+       "width": 6,
+       "height": 5,
+       "content": {
+        "$ref": "#/spec/panels/99999999-9999-9999-9999-999999999999"
+       }
+      },
+      {
+       "x": 6,
+       "y": 13,
+       "width": 6,
+       "height": 5,
+       "content": {
+        "$ref": "#/spec/panels/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+       }
+      },
+      {
+       "x": 0,
+       "y": 18,
+       "width": 2,
+       "height": 3,
+       "content": {
+        "$ref": "#/spec/panels/bbbbbbbb-0000-0000-0000-0000000000q1"
+       }
+      },
+      {
+       "x": 2,
+       "y": 18,
+       "width": 6,
+       "height": 3,
+       "content": {
+        "$ref": "#/spec/panels/bbbbbbbb-0000-0000-0000-0000000000q2"
+       }
+      },
+      {
+       "x": 0,
+       "y": 21,
+       "width": 4,
+       "height": 5,
+       "content": {
+        "$ref": "#/spec/panels/cccccccc-0000-0000-0000-00000000m001"
+       }
+      },
+      {
+       "x": 4,
+       "y": 21,
+       "width": 4,
+       "height": 5,
+       "content": {
+        "$ref": "#/spec/panels/cccccccc-0000-0000-0000-00000000m002"
+       }
+      },
+      {
+       "x": 8,
+       "y": 21,
+       "width": 4,
+       "height": 5,
+       "content": {
+        "$ref": "#/spec/panels/cccccccc-0000-0000-0000-00000000m003"
+       }
+      }
+     ]
+    }
+   }
+  ]
+ }
 }

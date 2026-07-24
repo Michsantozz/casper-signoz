@@ -1,13 +1,23 @@
 # SigNoz alerts (versioned)
 
 Canonical SigNoz alert rules (`schemaVersion: v2alpha1`, `threshold_rule`,
-rolling evaluation) over the OTLP traces the app exports. One rule per file.
+rolling evaluation) over the OTLP traces **and metrics** the app exports. One
+rule per file.
 
-| File | Fires when | Group by |
-|------|-----------|----------|
-| `llm-latency-p95.json` | `p95(duration_nano)` of `model_generation` spans > 30s (30000000000 ns) | `gen_ai.request.model` |
-| `llm-cost-spike.json` | derived cost (formula over token sums) > $5 in the window | — |
-| `tool-call-failures.json` | `count()` of `tool_call` spans with `error.type` > 5 in the window | `gen_ai.tool.name` |
+Two rule families ship: **traces-based** (aggregate over span attributes — work
+even if only traces flow) and **metric-based** (read the first-class OTel metrics
+the app now exports via the metrics pipeline — no derived-cost placeholder, and
+metric-native evaluation). The metric twins are preferred once the metrics
+pipeline is confirmed flowing; the traces rules stay as a fallback.
+
+| File | Signal | Fires when | Group by |
+|------|--------|-----------|----------|
+| `llm-latency-p95.json` | traces | `p95(duration_nano)` of `model_generation` spans > 30s (30000000000 ns) | `gen_ai.request.model` |
+| `llm-latency-p95-metric.json` | **metric** | `p95` of `gen_ai.client.operation.duration` histogram (op = chat) > 30s | — |
+| `llm-cost-spike.json` | traces | derived cost (formula over token sums) > $5 in the window | — |
+| `llm-cost-spike-metric.json` | **metric** | `increase` of `gen_ai.client.operation.cost` counter (real USD) > $5 in the window | — |
+| `tool-call-failures.json` | traces | `count()` of `tool_call` spans with `error.type` > 5 in the window | `gen_ai.tool.name` |
+| `answer-quality-low.json` | traces | avg answer completeness below target | — |
 
 All use a 5m rolling window, 1m frequency, `matchType: at_least_once`, and
 `renotify` on the `firing` state. Adjust `target`, `evalWindow`, `frequency`,
