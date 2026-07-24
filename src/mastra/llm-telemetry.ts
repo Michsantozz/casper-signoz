@@ -336,3 +336,126 @@ export function wrapToolset<M extends Record<string, ExecutableTool>>(
   }
   return out as M;
 }
+
+// ════════════════════════════════════════════════════════════════════════
+// Retrieval (RAG) telemetry
+// ════════════════════════════════════════════════════════════════════════
+//
+// Same rationale as the LLM/tool spans: Mastra's own exporter never lands a
+// queryable retrieval span in SigNoz. Memory's semanticRecall runs a pgvector
+// similarity search on every agent turn — the "retrieval hop" of the E2E trace
+// (embed query → cosine search → inject top-k as context). We emit ONE CLIENT
+// span per vector query so that hop is visible: the index it hit, top-k
+// requested, how many rows came back, the best (top) similarity score, and
+// latency. error.type on failure. mastra.span.type = "retrieval" is a new
+// discriminator the dashboard/alerts can filter on.
+//
+// db.system=pgvector follows the OTel semantic convention for DB spans, so the
+// span also reads as a database call in generic SigNoz DB views.
+
+// One row of a pgvector query result — only the fields we read for attributes.
+type VectorHit = { score?: number };
+
+function emitRetrievalSpan(args: {
+  indexName: string;
+  topK: number;
+  hitCount: number;
+  topScore?: number;
+  durationMs: number;
+  error?: unknown;
+}) {
+  const tracer = getTracer();
+  if (!tracer) return;
+
+  const span = tracer.startSpan(
+    `retrieve ${args.indexName}`,
+    { kind: SpanKind.CLIENT, startTime: new Date(Date.now() - args.durationMs) },
+    context.active(),
+  );
+
+  span.setAttribute("gen_ai.operation.name", "retrieve");
+  // Discriminator our versioned SigNoz dashboards/alerts filter on. New value
+  // (retrieval) — distinct from model_generation / tool_call.
+  span.setAttribute("mastra.span.type", "retrieval");
+  // OTel DB semantic-convention attrs so the span also reads as a vector search.
+  span.setAttribute("db.system", "pgvector");
+  span.setAttribute("db.operation.name", "query");
+  span.setAttribute("db.collection.name", args.indexName);
+  span.setAttribute("gen_ai.retrieval.top_k", args.topK);
+  span.setAttribute("gen_ai.retrieval.returned_count", args.hitCount);
+  if (args.topScore !== undefined) {
+    span.setAttribute("gen_ai.retrieval.top_score", args.topScore);
+  }
+  if (args.error) {
+    span.setStatus({ code: SpanStatusCode.ERROR });
+    span.setAttribute(
+      "error.type",
+      args.error instanceof Error ? args.error.name : "unknown",
+    );
+  }
+  span.end();
+}
+
+// The query method on a Mastra vector store: takes an object with
+// { indexName, topK?, ... } and resolves an array of scored hits. We read only
+// indexName/topK off the args and score off the hits — everything else stays
+// opaque and passes through untouched. The store type is left generic so the
+// wrapper preserves PgVector's exact query signature (strict indexName, its own
+// QueryResult return) instead of narrowing it.
+type QueryArgs = { indexName?: string; topK?: number };
+type VectorStore = {
+  query: (...args: never[]) => Promise<unknown[]>;
+};
+
+// Wrap a Mastra vector store so each `.query()` emits a retrieval span. Mutates
+// the store's `query` in place (PgVector is a class instance — spreading it would
+// drop its prototype methods), swapping in a wrapper that preserves the exact
+// signature and only side-effects a span. Idempotent: re-wrapping is a no-op via
+// the marker. No-op if there's no query method.
+const VECTOR_WRAPPED = Symbol.for("casper.vectorTelemetryWrapped");
+
+export function withVectorTelemetry<T extends VectorStore>(store: T): T {
+  if (typeof store.query !== "function") return store;
+  const marked = store as T & { [VECTOR_WRAPPED]?: boolean };
+  if (marked[VECTOR_WRAPPED]) return store;
+  const original = store.query.bind(store) as (
+    ...args: never[]
+  ) => Promise<unknown[]>;
+
+  const wrappedQuery = async (...callArgs: never[]): Promise<unknown[]> => {
+    const started = Date.now();
+    // First positional arg is the { indexName, topK, ... } params object. Read
+    // it defensively — we don't own its exact type here.
+    const queryArgs = callArgs[0] as QueryArgs | undefined;
+    const indexName = queryArgs?.indexName ?? "unknown";
+    // Mastra's PgVector defaults topK to 10 when omitted (see query signature).
+    const topK = queryArgs?.topK ?? 10;
+    try {
+      const hits = await original(...callArgs);
+      // Hits come back sorted by score desc, so hits[0] is the best match.
+      const topScore =
+        hits.length > 0 ? (hits[0] as VectorHit)?.score : undefined;
+      emitRetrievalSpan({
+        indexName,
+        topK,
+        hitCount: hits.length,
+        topScore,
+        durationMs: Date.now() - started,
+      });
+      return hits;
+    } catch (error) {
+      emitRetrievalSpan({
+        indexName,
+        topK,
+        hitCount: 0,
+        durationMs: Date.now() - started,
+        error,
+      });
+      throw error;
+    }
+  };
+
+  marked.query = wrappedQuery as T["query"];
+  marked[VECTOR_WRAPPED] = true;
+  return store;
+}

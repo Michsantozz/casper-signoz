@@ -88,10 +88,16 @@ describe("searchAgent — cross-meeting search specialist", () => {
 });
 
 describe("assistantAgent — supervisor", () => {
-  it("registers both sub-agents on its `agents` field", async () => {
+  it("registers its sub-agents on its `agents` field", async () => {
     const { assistantAgent } = await import("@/mastra/agents/assistant.agent");
     const sub = assistantAgent.__getStaticAgents() ?? {};
-    expect(Object.keys(sub).sort()).toEqual(["minutesAgent", "searchAgent"]);
+    // sreAgent joined minutes/search when the SRE-copilot shipped (6cdc558): the
+    // supervisor now also delegates operational/telemetry questions.
+    expect(Object.keys(sub).sort()).toEqual([
+      "minutesAgent",
+      "searchAgent",
+      "sreAgent",
+    ]);
   });
 
   it("keeps its own scheduling / calendar / bot-control tools", async () => {

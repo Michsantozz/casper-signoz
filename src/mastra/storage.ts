@@ -1,6 +1,7 @@
 import { PostgresStore, PgVector } from "@mastra/pg";
 import { sql } from "drizzle-orm";
 import { db } from "@/shared/db";
+import { withVectorTelemetry } from "@/mastra/llm-telemetry";
 
 /**
  * Shared Postgres storage for Mastra — the SAME database as the app (DATABASE_URL,
@@ -72,11 +73,16 @@ export function getMastraVector(): PgVector {
     if (!connectionString) {
       throw new Error("DATABASE_URL missing — Mastra vector store cannot start.");
     }
-    globalForStore.__mastraVector = new PgVector({
-      id: "casper-mastra-vector",
-      schemaName: "mastra",
-      connectionString,
-    });
+    // withVectorTelemetry mutates .query in place to emit a retrieval span per
+    // semanticRecall search (no-op when SigNoz is off). Idempotent — wrapping the
+    // singleton once is enough, but the marker guards a double-wrap regardless.
+    globalForStore.__mastraVector = withVectorTelemetry(
+      new PgVector({
+        id: "casper-mastra-vector",
+        schemaName: "mastra",
+        connectionString,
+      }),
+    );
   }
   return globalForStore.__mastraVector;
 }
