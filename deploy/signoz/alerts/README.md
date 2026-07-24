@@ -18,10 +18,19 @@ pipeline is confirmed flowing; the traces rules stay as a fallback.
 | `llm-cost-spike-metric.json` | **metric** | `increase` of `gen_ai.client.operation.cost` counter (real USD) > $5 in the window | — |
 | `tool-call-failures.json` | traces | `count()` of `tool_call` spans with `error.type` > 5 in the window | `gen_ai.tool.name` |
 | `answer-quality-low.json` | traces | avg answer completeness below target | — |
+| `health-watch-down.json` | traces | any `health_watch` span with `mastra.health_watch.ok = false` | `error.type` |
 
-All use a 5m rolling window, 1m frequency, `matchType: at_least_once`, and
+Most use a 5m rolling window, 1m frequency, `matchType: at_least_once`, and
 `renotify` on the `firing` state. Adjust `target`, `evalWindow`, `frequency`,
 and severity labels to taste.
+
+**`health-watch-down.json` is the exception, deliberately.** It watches the
+watchdog: the autonomous health-watch cron that queries SigNoz on a `*/15`
+schedule. Every other rule here fires on telemetry the agent *produces*, so if
+the self-observing loop breaks they fall silent rather than firing — silence
+stops being evidence of health. Its window is 30m/5m (a `*/15` cron only gets
+~2 chances per window) and its target is `> 0`: a single failed pass is the
+signal, since the span is only emitted on failure.
 
 ## Notify channel
 

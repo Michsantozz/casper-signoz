@@ -129,3 +129,44 @@ describe("runAgentHealthWatch — fan-out", () => {
     );
   });
 });
+
+// ── Failure containment ─────────────────────────────────────────────────────
+//
+// This runs on a */15 cron with concurrency:1. If the agent run throws, the
+// Inngest step dies and the tick produces NOTHING — the health watch goes silent
+// at exactly the moment the stack is unhealthy. Worse, if it HANGS it holds the
+// only concurrency slot and every later tick is skipped too. Both are contained:
+// the failure becomes a notification (broken silence) and `ran:false` (never
+// reads as a passing check).
+
+describe("runAgentHealthWatch — failure containment", () => {
+  it("does not throw when the agent run rejects, and reports ran:false", async () => {
+    generate.mockRejectedValue(new Error("MCP unreachable"));
+    const out = await run({ notify: false });
+    expect(out.ran).toBe(false);
+    expect(out.summary).toContain("FAILED");
+    expect(out.summary).toContain("MCP unreachable");
+  });
+
+  it("still notifies operators when the check fails (breaks the silence)", async () => {
+    generate.mockRejectedValue(new Error("MCP unreachable"));
+    const out = await run();
+    expect(out.notified).toBe(2);
+    expect(createNotificationsForUsers).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "agent_health_alert" }),
+    );
+  });
+
+  it("times out a hung agent run instead of holding the cron slot forever", async () => {
+    vi.useFakeTimers();
+    // Never settles — the exact failure mode concurrency:1 turns into an outage.
+    generate.mockReturnValue(new Promise(() => {}));
+    const pending = run({ notify: false });
+    await vi.advanceTimersByTimeAsync(5 * 60_000 + 1);
+    const out = await pending;
+    vi.useRealTimers();
+
+    expect(out.ran).toBe(false);
+    expect(out.summary).toContain("WatchTimeoutError");
+  });
+});

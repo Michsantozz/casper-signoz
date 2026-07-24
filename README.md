@@ -148,9 +148,11 @@ standard OTel; SigNoz is just an OTLP sink (it runs alongside Langfuse + PG).
   usage on the streaming path (two upstream gaps, diagnosed against the running
   stack); `src/mastra/llm-telemetry.ts` wraps every model with a dedicated OTel
   tracer that emits real (not estimated) `gen_ai.usage.*` + latency spans.
-- **Versioned dashboard + alerts** — a 10-panel agent/LLM dashboard
-  ([`deploy/signoz/dashboards/`](deploy/signoz/dashboards/)) and 3 threshold
-  alert rules ([`deploy/signoz/alerts/`](deploy/signoz/alerts/)) ship as code.
+- **Versioned dashboard + alerts** — a 19-panel agent/LLM dashboard
+  ([`deploy/signoz/dashboards/`](deploy/signoz/dashboards/)) and 7 alert rules
+  ([`deploy/signoz/alerts/`](deploy/signoz/alerts/)) ship as code, covering
+  every span type the app emits: LLM generations, tool calls, the RAG retrieval
+  hop, answer quality, and the autonomous health-watch itself.
 - **Reproducible deploy** — a SigNoz Foundry casting spec
   ([`deploy/signoz/casting.yaml`](deploy/signoz/casting.yaml) + `.lock`) so the
   exact SigNoz stack (server + MCP) can be re-created with one command.

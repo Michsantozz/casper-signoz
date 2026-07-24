@@ -24,6 +24,24 @@ Agent-native observability over `signal: traces`. Panels:
 | **Token rate (metric) by type** | `rate` of `gen_ai.client.token.usage` counter, grouped by `gen_ai.token.type` — `signal: metrics` |
 | **LLM cost (metric) by model** | `increase` of `gen_ai.client.operation.cost` counter (real USD), grouped by model — `signal: metrics` |
 | **Operation p95 latency (metric histogram)** | `p95` of `gen_ai.client.operation.duration` histogram, grouped by `gen_ai.operation.name` — `signal: metrics` |
+| RAG retrieval p95 latency | `p95(duration_nano)` where `mastra.span.type = 'retrieval'`, grouped by `db.collection.name` |
+| RAG top similarity score | `avg(gen_ai.retrieval.top_score)` grouped by collection |
+| Empty retrievals | `count()` where `gen_ai.retrieval.returned_count = 0` |
+| Health-watch failures | `count()` where `mastra.span.type = 'health_watch'` |
+
+### The retrieval + health-watch panels
+
+The app emits a span for the **RAG retrieval hop** (pgvector semantic recall,
+`mastra.span.type = 'retrieval'`) and for the **autonomous health-watch** cron
+(`health_watch`). Both were instrumented before any panel consumed them — the
+telemetry was produced and thrown away. These four close that gap.
+
+Retrieval is worth its own panels because it runs on *every* agent turn, ahead
+of the model call: when it slows down the whole turn slows down, and when
+`top_score` drifts down the agent is grounding its answers on progressively
+worse context — a leading indicator of the quality regression that
+`answer-quality-low` only catches after the fact. `Health-watch failures` is the
+watchdog's own vital sign (paired with `../alerts/health-watch-down.json`).
 
 ### The metric-native panels (fifth SigNoz signal)
 

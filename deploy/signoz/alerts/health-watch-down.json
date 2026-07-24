@@ -1,0 +1,88 @@
+{
+  "alert": "CasperAgent — Autonomous health-watch failing",
+  "alertType": "TRACES_BASED_ALERT",
+  "ruleType": "threshold_rule",
+  "schemaVersion": "v2alpha1",
+  "description": "The autonomous health-watch cron (mastra.span.type = health_watch) failed to complete a pass — it timed out or errored while querying SigNoz through the MCP. This is the watchdog's OWN vital sign, and it is the one failure the rest of this alert pack cannot catch: every other rule here fires on telemetry the agent produces, so when the self-observing loop breaks, those rules go quiet instead of firing. Silence stops being evidence of health. Check the SigNoz MCP endpoint (SIGNOZ_MCP_URL), the model provider, and the Inngest cron — the run is capped at 5 minutes, and with concurrency:1 a hung pass also blocks the ticks behind it.",
+  "condition": {
+    "compositeQuery": {
+      "queries": [
+        {
+          "type": "builder_query",
+          "spec": {
+            "name": "A",
+            "signal": "traces",
+            "stepInterval": 60,
+            "disabled": false,
+            "filter": {
+              "expression": "mastra.span.type = 'health_watch' AND mastra.health_watch.ok = false"
+            },
+            "groupBy": [
+              {
+                "name": "error.type",
+                "fieldDataType": "string",
+                "fieldContext": "tag"
+              }
+            ],
+            "legend": "{{error.type}}",
+            "having": {
+              "expression": ""
+            },
+            "aggregations": [
+              {
+                "expression": "count()"
+              }
+            ]
+          }
+        }
+      ],
+      "panelType": "graph",
+      "queryType": "builder",
+      "unit": "none"
+    },
+    "selectedQueryName": "A",
+    "thresholds": {
+      "kind": "basic",
+      "spec": [
+        {
+          "name": "critical",
+          "target": 1,
+          "matchType": "at_least_once",
+          "op": "above",
+          "channels": [
+            "casper-default"
+          ]
+        }
+      ]
+    }
+  },
+  "labels": {
+    "severity": "critical",
+    "component": "agent-health-watch"
+  },
+  "annotations": {
+    "summary": "Autonomous health-watch failed {{$value}} time(s)",
+    "description": "The self-observing loop could not complete a pass ({{$labels.error_type}}). Agent telemetry is unwatched until it recovers."
+  },
+  "evaluation": {
+    "kind": "rolling",
+    "spec": {
+      "evalWindow": "30m",
+      "frequency": "5m"
+    }
+  },
+  "notificationSettings": {
+    "groupBy": [
+      "error.type"
+    ],
+    "renotify": {
+      "enabled": true,
+      "interval": "1h",
+      "alertStates": [
+        "firing"
+      ]
+    },
+    "usePolicy": false
+  },
+  "disabled": false
+}

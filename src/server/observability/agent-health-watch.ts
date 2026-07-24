@@ -38,6 +38,63 @@ export type AgentHealthWatchResult = {
   notified: number;
 };
 
+// The watch runs on a */15 cron with concurrency:1, so a single hung agent run
+// doesn't just lose ITS tick — it holds the only slot and every subsequent tick
+// is skipped, silently, for as long as it hangs. The agent talks to an LLM and
+// an MCP server over the network; either can stall without ever rejecting. Cap
+// it well under the 15-min tick so a bad run costs one cycle, not the watch.
+const WATCH_TIMEOUT_MS = 5 * 60_000;
+
+class WatchTimeoutError extends Error {
+  constructor(ms: number) {
+    super(`health-watch agent run exceeded ${ms}ms`);
+    this.name = "WatchTimeoutError";
+  }
+}
+
+// A failed watch is itself a signal: emit it as a span so "the watchdog stopped
+// working" is queryable/alertable in SigNoz instead of only being visible as an
+// absence of data. mastra.span.type = "health_watch" is the discriminator.
+// Lazy import (mastra pulls in server modules — same cycle-avoidance as below).
+async function emitWatchFailureSpan(args: {
+  error: unknown;
+  durationMs: number;
+}) {
+  const { getSignozTracer } = await import("@/mastra/llm-telemetry");
+  const tracer = getSignozTracer();
+  if (!tracer) return;
+
+  const { SpanKind, SpanStatusCode } = await import("@opentelemetry/api");
+  const span = tracer.startSpan("agent_health_watch", {
+    kind: SpanKind.INTERNAL,
+    startTime: new Date(Date.now() - args.durationMs),
+  });
+  span.setAttribute("mastra.span.type", "health_watch");
+  span.setAttribute("mastra.health_watch.ok", false);
+  span.setAttribute(
+    "error.type",
+    args.error instanceof Error ? args.error.name : "unknown",
+  );
+  span.setStatus({ code: SpanStatusCode.ERROR });
+  span.end();
+}
+
+function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new WatchTimeoutError(ms)), ms);
+    work.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error as Error);
+      },
+    );
+  });
+}
+
 /**
  * Runs one health-watch pass. `notify` (default true) controls whether the
  * summary is fanned out as a notification — the manual demo trigger can turn it
@@ -56,8 +113,32 @@ export async function runAgentHealthWatch(opts?: {
     return { ran: false, summary: "sreAgent not registered", notified: 0 };
   }
 
-  const res = await agent.generate(WATCH_PROMPT);
-  const summary = (res?.text ?? "").trim() || "Health check produced no output.";
+  // The watcher itself must never crash the tick. An unhandled throw here fails
+  // the Inngest step, which produces NO output and NO notification — the failure
+  // mode of a health watch is that it goes quiet exactly when the stack is sick.
+  // Catch, emit a span so the failure is itself observable in SigNoz, and carry
+  // on to notify the operator that the check couldn't run.
+  let summary: string;
+  let failed = false;
+  const started = Date.now();
+  try {
+    const res = await withTimeout(
+      agent.generate(WATCH_PROMPT),
+      WATCH_TIMEOUT_MS,
+    );
+    summary = (res?.text ?? "").trim() || "Health check produced no output.";
+  } catch (error) {
+    failed = true;
+    const reason =
+      error instanceof Error ? `${error.name}: ${error.message}` : "unknown";
+    summary = `Health check FAILED to run (${reason}). The agent-health watch could not query telemetry this cycle.`;
+    await emitWatchFailureSpan({
+      error,
+      durationMs: Date.now() - started,
+    }).catch(() => {
+      /* observability of the observer is best-effort */
+    });
+  }
 
   // Force-flush the telemetry this pass emitted (LLM + the SRE-copilot's own
   // tool_call spans). A cron tick can be short-lived; without this, the batch
@@ -69,8 +150,11 @@ export async function runAgentHealthWatch(opts?: {
     /* flush is best-effort */
   }
 
+  // `ran` reports whether the check actually completed — a timed-out/errored
+  // pass still returns (and still notifies, so the silence is broken), but it
+  // must not read as a successful health check to any caller or test.
   if (!notify) {
-    return { ran: true, summary, notified: 0 };
+    return { ran: !failed, summary, notified: 0 };
   }
 
   // Operational signal → surface to every operator (no per-user scope: this is
@@ -83,5 +167,5 @@ export async function runAgentHealthWatch(opts?: {
     message: summary.slice(0, 500),
   });
 
-  return { ran: true, summary, notified: userIds.length };
+  return { ran: !failed, summary, notified: userIds.length };
 }

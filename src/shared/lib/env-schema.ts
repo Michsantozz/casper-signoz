@@ -78,7 +78,11 @@ const togglesSchema = z.object({
   //   - Cloud: set SIGNOZ_API_KEY (+ optional SIGNOZ_REGION) → `signoz` provider
   //     (the built-in provider REQUIRES the ingestion key, hence the split).
   // See mastra/observability.ts.
-  SIGNOZ_ENDPOINT: z.string().optional(),
+  // Must be a real URL: it's fed straight to the OTLP exporters, and a typo
+  // here fails SILENTLY (the exporter retries into the void, no telemetry ever
+  // lands, nothing logs). Validate at boot so a bad value is a startup error
+  // instead of an empty dashboard nobody notices for a week.
+  SIGNOZ_ENDPOINT: z.url().optional(),
   SIGNOZ_API_KEY: z.string().optional(),
   SIGNOZ_REGION: z.enum(["us", "eu", "in"]).optional(),
   // SigNoz MCP client (the SRE-copilot: the agent queries its OWN telemetry).
