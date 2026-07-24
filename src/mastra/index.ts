@@ -9,6 +9,7 @@ import { meetingBackfillWorkflow } from "./workflows/meeting-backfill.workflow";
 import { autoScheduleWorkflow } from "./workflows/auto-schedule.workflow";
 import { oauthNonceSweepWorkflow } from "./workflows/oauth-nonce-sweep.workflow";
 import { agentHealthWatchWorkflow } from "./workflows/agent-health-watch.workflow";
+import { agentReliabilityReportWorkflow } from "./workflows/agent-reliability-report.workflow";
 import { getMastraStore } from "./storage";
 import { createObservability } from "./observability";
 
@@ -26,6 +27,7 @@ export const mastra = new Mastra({
     autoScheduleWorkflow,
     oauthNonceSweepWorkflow,
     agentHealthWatchWorkflow,
+    agentReliabilityReportWorkflow,
   },
   // Persists traces, telemetry and workflow state in the app's PG (schema
   // `mastra`). Without this the cron would run stateless.

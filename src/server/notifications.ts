@@ -22,7 +22,11 @@ export type NotificationType =
   // OWN telemetry (a failing tool, a latency/cost spike) and — where warranted —
   // provisioned a SigNoz alert for it. Surfaced so the self-observing loop is
   // visible to the operator, not silent.
-  | "agent_health_alert";
+  | "agent_health_alert"
+  // The weekly agent-reliability-report workflow summarized CasperAgent's OWN
+  // health week-over-week (error rate + latency per model/tool) and ranked the
+  // regressions. A scheduled fleet-health digest, surfaced to the operator.
+  | "agent_reliability_report";
 
 /** Creates a notification for a user. */
 export async function createNotification(input: {
