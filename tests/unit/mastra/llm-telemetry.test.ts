@@ -462,3 +462,166 @@ describe("emitToolSpan — attributes + parenting (SigNoz on)", () => {
     expect(span!.parentSpanContext?.spanId).toBe(VALID_SPAN.id);
   });
 });
+
+// ── OTLP endpoint resolution ────────────────────────────────────────────────
+//
+// The metrics URL is DERIVED from SIGNOZ_ENDPOINT (documented as the traces
+// path). The old string-replace only handled the exact `…/v1/traces` shape: any
+// other form passed through untouched and metrics were POSTed to the traces
+// path, where the collector drops them — no error, no logs, just permanently
+// empty metric panels. Assert every realistic endpoint shape resolves to the
+// right signal path.
+
+async function capturedExporterUrls(endpoint?: string) {
+  const urls: { traces?: string; metrics?: string } = {};
+
+  vi.doMock("@opentelemetry/exporter-trace-otlp-proto", () => ({
+    OTLPTraceExporter: class {
+      constructor(cfg: { url?: string }) {
+        urls.traces = cfg.url;
+      }
+      export(_s: unknown, cb: (r: unknown) => void) {
+        cb({ code: 0 });
+      }
+      shutdown() {
+        return Promise.resolve();
+      }
+      forceFlush() {
+        return Promise.resolve();
+      }
+    },
+  }));
+  vi.doMock("@opentelemetry/exporter-metrics-otlp-proto", () => ({
+    OTLPMetricExporter: class {
+      constructor(cfg: { url?: string }) {
+        urls.metrics = cfg.url;
+      }
+      export(_m: unknown, cb: (r: unknown) => void) {
+        cb({ code: 0 });
+      }
+      shutdown() {
+        return Promise.resolve();
+      }
+      forceFlush() {
+        return Promise.resolve();
+      }
+    },
+  }));
+  vi.doMock("@mastra/core/observability/context-storage", () => ({
+    getCurrentSpan: () => undefined,
+  }));
+
+  if (endpoint) process.env.SIGNOZ_ENDPOINT = endpoint;
+  else process.env.SIGNOZ_API_KEY = "key"; // SigNoz on without an endpoint
+
+  const mod = await import("@/mastra/llm-telemetry");
+  // Touch both pipelines so each exporter gets constructed.
+  const wrapped = mod.withToolTelemetry(
+    { id: "t", execute: async () => "ok" },
+    "t",
+  );
+  await (wrapped.execute as () => Promise<unknown>)();
+  return urls;
+}
+
+describe("OTLP endpoint resolution", () => {
+  it("derives the metrics path from a canonical /v1/traces endpoint", async () => {
+    const urls = await capturedExporterUrls("http://signoz:4318/v1/traces");
+    expect(urls.traces).toBe("http://signoz:4318/v1/traces");
+    expect(urls.metrics).toBe("http://signoz:4318/v1/metrics");
+  });
+
+  it("resolves both signals from a bare collector root (the silent-failure case)", async () => {
+    const urls = await capturedExporterUrls("http://signoz:4318");
+    expect(urls.traces).toBe("http://signoz:4318/v1/traces");
+    expect(urls.metrics).toBe("http://signoz:4318/v1/metrics");
+  });
+
+  it("preserves a proxied base path instead of clobbering it", async () => {
+    const urls = await capturedExporterUrls(
+      "https://gateway.example.com/otlp/v1/traces",
+    );
+    expect(urls.traces).toBe("https://gateway.example.com/otlp/v1/traces");
+    expect(urls.metrics).toBe("https://gateway.example.com/otlp/v1/metrics");
+  });
+
+  it("falls back to the local default when only an API key is set", async () => {
+    const urls = await capturedExporterUrls();
+    expect(urls.traces).toBe("http://localhost:4318/v1/traces");
+    expect(urls.metrics).toBe("http://localhost:4318/v1/metrics");
+  });
+});
+
+// ── Resource attributes ──────────────────────────────────────────────────────
+//
+// service.name alone makes staging and prod telemetry INDISTINGUISHABLE in
+// SigNoz — same service, same series, silently interleaved. These attrs are what
+// the resource filters key on, so a regression here doesn't break a dashboard
+// loudly, it just quietly merges environments. Assert them on a real span.
+
+describe("OTel resource attributes", () => {
+  it("carries service + deployment.environment + instance id on every span", async () => {
+    process.env.DEPLOYMENT_ENVIRONMENT = "staging";
+    process.env.HOSTNAME = "casper-pod-7";
+    const { mod, flush } = await loadWithCapturedSpans(VALID_SPAN);
+
+    const wrapped = mod.withToolTelemetry(
+      { id: "t", execute: async () => "ok" },
+      "t",
+    );
+    await (wrapped.execute as () => Promise<unknown>)();
+
+    const span = (await flush())[0];
+    expect(span).toBeDefined();
+    const r = span!.resource.attributes;
+    expect(r["service.name"]).toBe("casper-assistant");
+    expect(r["service.namespace"]).toBe("casperagent");
+    expect(r["deployment.environment.name"]).toBe("staging");
+    expect(r["service.instance.id"]).toBe("casper-pod-7");
+  });
+});
+
+// ── finish_reasons as a native array ────────────────────────────────────────
+//
+// Semconv types this as string[]. Shipping a JSON *string* (`'["stop"]'`) makes
+// SigNoz index an opaque blob you can only substring-match — `= 'stop'` never
+// matches. Assert the real array shape reaches the span.
+
+describe("gen_ai.response.finish_reasons", () => {
+  it("is emitted as a string array, not a JSON string", async () => {
+    const { mod, flush } = await loadWithCapturedSpans(VALID_SPAN);
+
+    await mod.llmTelemetryMiddleware.wrapGenerate!({
+      doGenerate: async () => ({
+        usage: { inputTokens: { total: 10 }, outputTokens: { total: 5 } },
+        finishReason: "stop",
+      }),
+      model: { modelId: "m", provider: "openai" },
+    } as never);
+
+    const span = (await flush()).find((s) => s.name.startsWith("chat "));
+    expect(span!.attributes["gen_ai.response.finish_reasons"]).toEqual(["stop"]);
+  });
+
+  // Regression: some providers (observed live: Fireworks kimi-k2 via the AI SDK)
+  // return finishReason as an OBJECT, not a string. A bare String() shipped
+  // "[object Object]" into the span for 78% of real spans, breaking the filter.
+  // The reason must be unwrapped to its string field.
+  it("unwraps an object-shaped finishReason instead of stringifying to [object Object]", async () => {
+    const { mod, flush } = await loadWithCapturedSpans(VALID_SPAN);
+
+    await mod.llmTelemetryMiddleware.wrapGenerate!({
+      doGenerate: async () => ({
+        usage: { inputTokens: { total: 10 }, outputTokens: { total: 5 } },
+        finishReason: { type: "stop" },
+      }),
+      model: { modelId: "m", provider: "openai" },
+    } as never);
+
+    const span = (await flush()).find((s) => s.name.startsWith("chat "));
+    expect(span!.attributes["gen_ai.response.finish_reasons"]).toEqual(["stop"]);
+    expect(
+      JSON.stringify(span!.attributes["gen_ai.response.finish_reasons"]),
+    ).not.toContain("[object Object]");
+  });
+});

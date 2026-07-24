@@ -25,7 +25,10 @@ import {
   BatchSpanProcessor,
 } from "@opentelemetry/sdk-trace-base";
 import {
+  ATTR_DEPLOYMENT_ENVIRONMENT_NAME,
+  ATTR_SERVICE_INSTANCE_ID,
   ATTR_SERVICE_NAME,
+  ATTR_SERVICE_NAMESPACE,
   ATTR_SERVICE_VERSION,
 } from "@opentelemetry/semantic-conventions";
 import { wrapLanguageModel, type LanguageModelMiddleware } from "ai";
@@ -51,6 +54,66 @@ import { wrapLanguageModel, type LanguageModelMiddleware } from "ai";
 
 const SERVICE_NAME = "casper-assistant";
 
+// ── OTel resource ───────────────────────────────────────────────────────────
+//
+// Every span/metric carries these. service.name alone is not enough to operate
+// the stack: without deployment.environment.name a staging run and a prod run
+// are INDISTINGUISHABLE in SigNoz (same service, same metrics, silently mixed
+// time series), and without service.instance.id you can't tell one replica's
+// spike from a fleet-wide one. Both are OTel semconv-standard, so SigNoz's
+// resource filters pick them up with no extra config.
+const DEPLOY_ENV =
+  process.env.DEPLOYMENT_ENVIRONMENT ??
+  process.env.VERCEL_ENV ??
+  process.env.NODE_ENV ??
+  "development";
+
+// Stable for the life of the process, unique per replica. Prefer the platform's
+// own instance id when it exposes one, else a random uuid at module load.
+const INSTANCE_ID =
+  process.env.HOSTNAME ?? process.env.VERCEL_DEPLOYMENT_ID ?? crypto.randomUUID();
+
+function signozResource() {
+  return resourceFromAttributes({
+    [ATTR_SERVICE_NAME]: SERVICE_NAME,
+    [ATTR_SERVICE_VERSION]: process.env.npm_package_version ?? "0.0.0",
+    [ATTR_SERVICE_NAMESPACE]: "casperagent",
+    [ATTR_SERVICE_INSTANCE_ID]: INSTANCE_ID,
+    [ATTR_DEPLOYMENT_ENVIRONMENT_NAME]: DEPLOY_ENV,
+  });
+}
+
+// ── OTLP endpoint resolution ────────────────────────────────────────────────
+//
+// SIGNOZ_ENDPOINT is documented as the TRACES url (…/v1/traces), and the metrics
+// exporter needs …/v1/metrics on the same collector. Deriving that by string
+// replace is a silent-failure trap: an endpoint without the /v1/traces suffix
+// (a bare collector root, or a proxy path) passes the replace untouched and
+// metrics get POSTed to the traces path — the collector 404s/ignores them and
+// the metric panels stay empty with no error anywhere. Parse the URL instead and
+// rewrite the SIGNAL SEGMENT explicitly, so any shape resolves correctly.
+function otlpEndpoint(signal: "traces" | "metrics"): string {
+  const raw = process.env.SIGNOZ_ENDPOINT;
+  if (!raw) return `http://localhost:4318/v1/${signal}`;
+
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    // Not a parseable URL — env validation warns at boot; fall back to local so
+    // we never throw on the telemetry path.
+    return `http://localhost:4318/v1/${signal}`;
+  }
+
+  // Strip a trailing signal segment (traces|metrics|logs), with or without the
+  // /v1 prefix, then re-append the one we want. Handles: …/v1/traces, …/v1/,
+  // …/ (collector root), and …/proxy/otlp/v1/traces alike.
+  const path = url.pathname.replace(/\/+$/, "");
+  const base = path.replace(/(\/v1)?\/(traces|metrics|logs)$/, "");
+  url.pathname = `${base}/v1/${signal}`;
+  return url.toString();
+}
+
 // Optional per-token pricing. Cost is emitted ONLY when both are configured —
 // no placeholder ever ships as a real number. Values are USD per 1M tokens.
 function pricePerToken(envVar: string): number | undefined {
@@ -59,6 +122,31 @@ function pricePerToken(envVar: string): number | undefined {
   const perMillion = Number(raw);
   if (!Number.isFinite(perMillion) || perMillion < 0) return undefined;
   return perMillion / 1_000_000;
+}
+
+// Coerce a provider's finishReason into the plain string semconv expects
+// ("stop", "length", "tool_calls", …). Most providers give a string; some
+// (observed: Fireworks kimi-k2 via the AI SDK) return an OBJECT, and a bare
+// String() on it ships the literal "[object Object]" — which is exactly what
+// then landed in gen_ai.response.finish_reasons for 78% of real spans, making
+// the attribute unfilterable. Unwrap the common object shapes before stringifying
+// so the finish-reason panels/filters see a real value.
+function finishReasonText(raw: unknown): string | undefined {
+  if (raw == null) return undefined;
+  if (typeof raw === "string") return raw;
+  if (typeof raw === "object") {
+    const o = raw as Record<string, unknown>;
+    const field = o.type ?? o.reason ?? o.finishReason ?? o.value;
+    if (typeof field === "string") return field;
+    // Unknown object shape: preserve the payload as JSON rather than lose it to
+    // "[object Object]", so it stays inspectable even if not cleanly filterable.
+    try {
+      return JSON.stringify(raw);
+    } catch {
+      return undefined;
+    }
+  }
+  return String(raw);
 }
 
 let tracerProvider: BasicTracerProvider | undefined;
@@ -73,18 +161,15 @@ export function getSignozTracer() {
   if (!endpoint && !process.env.SIGNOZ_API_KEY) return undefined;
 
   if (!tracerProvider) {
-    // SIGNOZ_ENDPOINT points at the traces path (…/v1/traces); the OTLP proto
-    // exporter wants the same URL. Fall back to the local self-host default.
-    const url = endpoint ?? "http://localhost:4318/v1/traces";
+    // SIGNOZ_ENDPOINT points at the traces path (…/v1/traces); normalize it so a
+    // collector root or a proxied path resolves to the traces signal too.
+    const url = otlpEndpoint("traces");
     const headers = process.env.SIGNOZ_API_KEY
       ? { "signoz-access-token": process.env.SIGNOZ_API_KEY }
       : undefined;
 
     tracerProvider = new BasicTracerProvider({
-      resource: resourceFromAttributes({
-        [ATTR_SERVICE_NAME]: SERVICE_NAME,
-        [ATTR_SERVICE_VERSION]: process.env.npm_package_version ?? "0.0.0",
-      }),
+      resource: signozResource(),
       spanProcessors: [
         new BatchSpanProcessor(new OTLPTraceExporter({ url, headers })),
       ],
@@ -119,15 +204,6 @@ let instruments:
     }
   | undefined;
 
-// Derive the metrics OTLP path from SIGNOZ_ENDPOINT (which points at
-// …/v1/traces). The OTLP proto metric exporter wants …/v1/metrics on the same
-// collector. Swap the signal segment; fall back to the local self-host default.
-function metricsEndpoint(): string {
-  const traces = process.env.SIGNOZ_ENDPOINT;
-  if (!traces) return "http://localhost:4318/v1/metrics";
-  return traces.replace(/\/v1\/traces\/?$/, "/v1/metrics");
-}
-
 function getSignozMeter(): Meter | undefined {
   if (!process.env.SIGNOZ_ENDPOINT && !process.env.SIGNOZ_API_KEY) {
     return undefined;
@@ -139,14 +215,11 @@ function getSignozMeter(): Meter | undefined {
       : undefined;
 
     meterProvider = new MeterProvider({
-      resource: resourceFromAttributes({
-        [ATTR_SERVICE_NAME]: SERVICE_NAME,
-        [ATTR_SERVICE_VERSION]: process.env.npm_package_version ?? "0.0.0",
-      }),
+      resource: signozResource(),
       readers: [
         new PeriodicExportingMetricReader({
           exporter: new OTLPMetricExporter({
-            url: metricsEndpoint(),
+            url: otlpEndpoint("metrics"),
             headers,
           }),
           // Ship every 10s so metric panels track a live demo closely.
@@ -181,6 +254,19 @@ function getInstruments() {
     duration: meter.createHistogram("gen_ai.client.operation.duration", {
       description: "Duration of a GenAI operation (LLM / tool / retrieval)",
       unit: "s",
+      // The SDK's default boundaries top out at 10_000 — sane for MILLISECONDS,
+      // useless here: this instrument records SECONDS, so every real LLM call
+      // (0.5s–60s) lands in the first two buckets and p95/p99 collapse to a
+      // meaningless "somewhere under 10s". These are the OTel GenAI semconv
+      // recommended boundaries for gen_ai.client.operation.duration — they give
+      // real resolution across the sub-second tool call and the 40s streamed
+      // completion alike.
+      advice: {
+        explicitBucketBoundaries: [
+          0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.64, 1.28, 2.56, 5.12, 10.24,
+          20.48, 40.96, 81.92,
+        ],
+      },
     }),
   };
   return instruments;
@@ -192,6 +278,54 @@ export async function flushLlmTelemetry() {
   await tracerProvider?.forceFlush().catch(() => {});
   await meterProvider?.forceFlush().catch(() => {});
 }
+
+// ── Shutdown flush ──────────────────────────────────────────────────────────
+//
+// BatchSpanProcessor buffers spans and the metric reader exports on a 10s tick,
+// so on SIGTERM (every container stop, rolling deploy, scale-down) whatever
+// hasn't shipped yet dies with the process — precisely the telemetry of the
+// final requests, which is when things usually went wrong. Flush on the way out.
+//
+// Registered once per PROCESS, not per module instance. A module-level boolean
+// is not enough: Next's dev hot-reload and Vitest's per-file module registry
+// each re-evaluate this file, so a local guard still stacks one listener set per
+// evaluation (MaxListenersExceededWarning at 11, then an unbounded leak). Park
+// the flag on a process-level Symbol so every copy of the module shares it.
+const SHUTDOWN_HOOKED = Symbol.for("casper.llmTelemetry.shutdownHooked");
+
+function registerShutdownFlush() {
+  if (typeof process === "undefined") return;
+  const marked = process as unknown as Record<symbol, boolean | undefined>;
+  if (marked[SHUTDOWN_HOOKED]) return;
+  marked[SHUTDOWN_HOOKED] = true;
+
+  let flushing = false;
+  const onSignal = (signal: NodeJS.Signals) => {
+    if (flushing) return;
+    flushing = true;
+    // Best-effort and bounded: never hold a shutdown hostage to a hung
+    // collector. Re-raise the signal afterwards so the default disposition
+    // (exit) still applies — we only borrow the moment before it.
+    const bounded = Promise.race([
+      flushLlmTelemetry(),
+      new Promise((resolve) => setTimeout(resolve, 2_000)),
+    ]);
+    void bounded.finally(() => {
+      process.removeListener(signal, onSignal);
+      process.kill(process.pid, signal);
+    });
+  };
+
+  process.once("SIGTERM", onSignal);
+  process.once("SIGINT", onSignal);
+  // beforeExit fires on a natural drain (one-shot scripts, cron ticks) where no
+  // signal is ever delivered. Safe to await here — the loop is still alive.
+  process.on("beforeExit", () => {
+    void flushLlmTelemetry();
+  });
+}
+
+registerShutdownFlush();
 
 // Normalized token counts, flattened from the AI SDK v3 usage shape
 // (`inputTokens: { total, noCache, cacheRead, cacheWrite }`, etc).
@@ -311,10 +445,12 @@ function emitLlmSpan(args: {
     span.setAttribute("gen_ai.server.ttft", args.ttftMs / 1000);
   }
   if (args.finishReason) {
-    span.setAttribute(
-      "gen_ai.response.finish_reasons",
-      JSON.stringify([args.finishReason]),
-    );
+    // Semconv says this is an ARRAY attribute. Passing a JSON *string* ships
+    // the literal `["stop"]`, which SigNoz indexes as an opaque string — you
+    // can't filter `= 'stop'`, only substring-match the serialized form. OTel
+    // supports string[] natively; emit it as one so the query builder groups
+    // and filters on the real value.
+    span.setAttribute("gen_ai.response.finish_reasons", [args.finishReason]);
   }
   if (args.error) {
     span.setStatus({ code: SpanStatusCode.ERROR });
@@ -461,7 +597,7 @@ export const llmTelemetryMiddleware: LanguageModelMiddleware = {
         provider: providerOf(model),
         usage: result.usage,
         durationMs: Date.now() - started,
-        finishReason: String(result.finishReason),
+        finishReason: finishReasonText(result.finishReason),
       });
       return result;
     } catch (error) {
@@ -501,7 +637,7 @@ export const llmTelemetryMiddleware: LanguageModelMiddleware = {
           }
           if (chunk?.type === "finish") {
             usage = chunk.usage;
-            finishReason = String(chunk.finishReason);
+            finishReason = finishReasonText(chunk.finishReason);
           }
           controller.enqueue(chunk);
         },
@@ -582,6 +718,12 @@ function emitToolSpan(args: {
 
 // A Mastra tool: the only field we touch is `execute`, whose signature we keep
 // intact by inference. `id` names the span.
+//
+// `unknown[]` (not `never[]`): the wrapper is signature-agnostic, but `never[]`
+// makes the parameter list UNCALLABLE in the checker — every call site type-
+// checks vacuously, so a genuinely wrong forwarding of args would slip through.
+// `unknown[]` keeps the pass-through generic while the arity/forwarding still
+// gets checked. The concrete tool's real signature is preserved by `T` either way.
 type ExecutableTool = { id?: string; execute?: (...a: never[]) => unknown };
 
 // Wrap a single Mastra tool so each execution emits a tool_call span. Preserves
@@ -593,9 +735,9 @@ export function withToolTelemetry<T extends ExecutableTool>(
 ): T {
   if (typeof tool.execute !== "function") return tool;
   const toolName = name ?? tool.id ?? "unknown";
-  const original = tool.execute.bind(tool) as (...a: never[]) => unknown;
+  const original = tool.execute.bind(tool) as (...a: unknown[]) => unknown;
 
-  const wrapped = async (...callArgs: never[]) => {
+  const wrapped = async (...callArgs: unknown[]) => {
     const started = Date.now();
     try {
       const result = await original(...callArgs);
@@ -717,10 +859,10 @@ export function withVectorTelemetry<T extends VectorStore>(store: T): T {
   const marked = store as T & { [VECTOR_WRAPPED]?: boolean };
   if (marked[VECTOR_WRAPPED]) return store;
   const original = store.query.bind(store) as (
-    ...args: never[]
+    ...args: unknown[]
   ) => Promise<unknown[]>;
 
-  const wrappedQuery = async (...callArgs: never[]): Promise<unknown[]> => {
+  const wrappedQuery = async (...callArgs: unknown[]): Promise<unknown[]> => {
     const started = Date.now();
     // First positional arg is the { indexName, topK, ... } params object. Read
     // it defensively — we don't own its exact type here.
