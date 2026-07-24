@@ -2,7 +2,7 @@
 #
 # Este arquivo sobe SÓ os services de infra, isolados do stack de produção
 # (docker-compose.yml). Portas host deslocadas pra não colidir com o prod:
-#   db    → 5433  (prod usa rede interna; casper-postgres avulso usa 5434)
+#   db    → 5435  (prod usa rede interna; casper-postgres avulso usa 5434; 5433 fica pro catologcompo dev)
 #   minio → 9210 (API) / 9211 (console)   (prod usa 9200/9201)
 # O Inngest roda via CLI no host (`pnpm dev:inngest`), sem keys — não precisa
 # de container aqui.
@@ -15,7 +15,7 @@
 #
 # :3001 (não :3000) porque evolution_frontend ocupa :3000 no host.
 #
-# .env.local já aponta DATABASE_URL/S3_* pra estas portas (localhost:5433/9210).
+# .env.local já aponta DATABASE_URL/S3_* pra estas portas (localhost:5435/9210).
 
 name: casperagent-dev
 
@@ -30,7 +30,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-casper}
       POSTGRES_DB: casperagent
     ports:
-      - "5433:5432" # exposto no host pro `pnpm dev`/`pnpm db:migrate`
+      - "5435:5432" # exposto no host pro `pnpm dev`/`pnpm db:migrate`
     volumes:
       - pgdata-dev:/var/lib/postgresql/data
     healthcheck:
