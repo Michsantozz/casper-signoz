@@ -28,6 +28,14 @@ services:
       - signoz-network
 
   inngest:
+    # Host 8288/8289 já estão ocupados por outro stack local (catologcompo). O
+    # publish do host aqui é só pro dashboard do Inngest — o app fala com o
+    # inngest pela REDE INTERNA (INNGEST_BASE_URL=http://inngest:8288), então
+    # remapear a porta do host não afeta o handshake app<->inngest. Sem este
+    # remap o container colide na 8288, falha o bind e fica SEM rede (o cron
+    # autônomo não dispara). Loopback-only: o dashboard não vai pra LAN.
+    ports: !override
+      - "127.0.0.1:8290:8288"
     # `inngest start` (prod) não autodescobre como o dev. Precisa do --sdk-url
     # apontando pro endpoint do app (rede interna do compose) pra sincronizar as
     # functions/workflows por polling. Sem isso: 0 functions, crons não disparam.
