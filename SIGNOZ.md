@@ -139,6 +139,13 @@ host port binding is irrelevant (remove it from the generated compose if `:8000`
 collides on the host). Files: `src/mastra/mcp-signoz.ts` (client),
 `src/mastra/agents/sre.agent.ts` (agent).
 
+## Agent pipeline funnel
+
+A SigNoz **trace funnel** models an agent run as `invoke_agent → tool_call →
+generate` (Mastra's native trace spans) and measures conversion / drop-off per
+phase — observability that only makes sense for an agent. Versioned at
+[`deploy/signoz/funnels/`](deploy/signoz/funnels/) with its create/caveat notes.
+
 ## Verify traces land
 
 ```bash

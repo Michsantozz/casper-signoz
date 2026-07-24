@@ -1,0 +1,42 @@
+{
+  "funnel_name": "CasperAgent — plan → tool → generate",
+  "description": "Agent pipeline funnel over Mastra's native trace spans: how many agent runs reach tool execution, and how many of those reach the final generation. Conversion / drop-off per phase — observability that only makes sense for an agent. Steps match by service_name + span_name on the same trace, in temporal order (see README for the span_name caveat).",
+  "steps": [
+    {
+      "step_order": 1,
+      "name": "invoke_agent",
+      "service_name": "casper-assistant",
+      "span_name": "invoke_agent SRE / Telemetry Copilot",
+      "filters": {
+        "op": "AND",
+        "items": [
+          { "key": { "key": "mastra.span.type", "dataType": "string", "type": "tag" }, "op": "=", "value": "agent_run" }
+        ]
+      }
+    },
+    {
+      "step_order": 2,
+      "name": "tool_call",
+      "service_name": "casper-assistant",
+      "span_name": "execute_tool signoz_signoz_aggregate_traces",
+      "filters": {
+        "op": "AND",
+        "items": [
+          { "key": { "key": "mastra.span.type", "dataType": "string", "type": "tag" }, "op": "=", "value": "mcp_tool_call" }
+        ]
+      }
+    },
+    {
+      "step_order": 3,
+      "name": "generate",
+      "service_name": "casper-assistant",
+      "span_name": "model_inference SRE / Telemetry Copilot",
+      "filters": {
+        "op": "AND",
+        "items": [
+          { "key": { "key": "mastra.span.type", "dataType": "string", "type": "tag" }, "op": "=", "value": "model_inference" }
+        ]
+      }
+    }
+  ]
+}
