@@ -17,7 +17,12 @@ export type NotificationType =
   | "meeting_summary_ready"
   // Minutes could NOT be generated — transcript failed on Recall, or enrichment
   // exhausted its retries. Surfaced so a failed meeting isn't a silent dead-end.
-  | "meeting_failed";
+  | "meeting_failed"
+  // The autonomous agent-health-watch workflow found a problem in CasperAgent's
+  // OWN telemetry (a failing tool, a latency/cost spike) and — where warranted —
+  // provisioned a SigNoz alert for it. Surfaced so the self-observing loop is
+  // visible to the operator, not silent.
+  | "agent_health_alert";
 
 /** Creates a notification for a user. */
 export async function createNotification(input: {
