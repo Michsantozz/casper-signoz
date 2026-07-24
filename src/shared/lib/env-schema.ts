@@ -30,6 +30,18 @@ const baseSchema = z.object({
     .default("development"),
 });
 
+// Per-1M-token price (USD). Optional, but when set it's fed straight into the
+// SigNoz cost computation (llm-telemetry.ts) — a typo like "0,95" or "abc" would
+// otherwise silently disable cost (Number(...) → NaN, cost never emitted, panels
+// stay empty with no error). Validate the shape at boot so a bad value is a
+// startup error instead of a mysteriously empty cost dashboard.
+const pricePerMtok = z
+  .string()
+  .refine((v) => Number.isFinite(Number(v)) && Number(v) >= 0, {
+    message: "must be a non-negative number (USD per 1M tokens)",
+  })
+  .optional();
+
 // Feature toggles that decide which conditional blocks below are required.
 const togglesSchema = z.object({
   MODEL_PROVIDER: z
@@ -100,6 +112,18 @@ const togglesSchema = z.object({
   SIGNOZ_MCP_URL: z.string().optional(),
   SIGNOZ_MCP_API_KEY: z.string().optional(),
   SIGNOZ_INSTANCE_URL: z.string().optional(),
+  // LLM pricing (USD per 1M tokens) for the SigNoz cost signal. Read in
+  // llm-telemetry.ts (pricePerToken) to compute `gen_ai.usage.cost` +
+  // `gen_ai.client.operation.cost`. All optional and all-or-nothing per pair:
+  // cost is emitted ONLY when both INPUT and OUTPUT are set — absent → no cost
+  // number ever fabricated (span/metric simply omit cost). The two CACHE prices
+  // are refinements: cache-read bills at a fraction of input, cache-write at a
+  // premium; when unset each falls back to the plain INPUT price. Declared here
+  // so a malformed value fails at boot instead of silently zeroing cost.
+  LLM_PRICE_INPUT_PER_MTOK: pricePerMtok,
+  LLM_PRICE_OUTPUT_PER_MTOK: pricePerMtok,
+  LLM_PRICE_CACHE_READ_PER_MTOK: pricePerMtok,
+  LLM_PRICE_CACHE_WRITE_PER_MTOK: pricePerMtok,
   // Slack channel for the sreAgent (ChatOps: mention/DM the SRE-copilot in
   // Slack and it investigates via the SigNoz MCP tools). Wired through Mastra's
   // native `channels` config (@chat-adapter/slack under the hood). All-or-

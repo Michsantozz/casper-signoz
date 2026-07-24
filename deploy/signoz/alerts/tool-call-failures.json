@@ -15,7 +15,7 @@
             "stepInterval": 60,
             "disabled": false,
             "filter": {
-              "expression": "mastra.span.type = 'tool_call' AND error.type EXISTS"
+              "expression": "mastra.span.type = 'tool_call' AND casper.self_instrumented = true AND error.type EXISTS"
             },
             "groupBy": [
               {

@@ -45,12 +45,15 @@ email/PagerDuty/Opsgenie/Teams, create the channel in SigNoz
 (Settings → Alert Channels), then either set `usePolicy: true` (route policies)
 or add the channel name to each threshold's `channels` array.
 
-## ⚠️ Cost alert uses a placeholder price
+## Cost alert pricing
 
 `llm-cost-spike.json` derives cost as `input_tokens * PRICE_IN + output_tokens *
-PRICE_OUT`. The committed constant is a **PLACEHOLDER** `0.0000009` USD/token
-(= $0.90 per 1M) for both. Replace both constants in the `F1` formula with the
-real Fireworks `glm-5p2` rates before trusting the dollar threshold.
+PRICE_OUT` at the **real Fireworks kimi-k2p7-code rates**: `0.00000095` USD/token
+input (= $0.95 / 1M) and `0.000004` USD/token output (= $4.00 / 1M). This is a
+trace-side estimate (no cache-read discount → overstates on cache-heavy windows).
+The metric-based twin `llm-cost-spike-metric.json` fires on the precise
+`gen_ai.client.operation.cost` counter — prefer it for exact-dollar paging. If
+you switch models, update both constants to your provider's per-token price.
 
 ## Create
 

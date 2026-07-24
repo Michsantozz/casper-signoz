@@ -14,7 +14,7 @@
   "spec": {
     "display": {
       "name": "CasperAgent — Agent & LLM Observability",
-      "description": "Agent-native observability for CasperAgent (Mastra + Fireworks) across all THREE OTLP signals — traces, metrics, AND logs. Traces panels filter on mastra.span.type (model_generation / tool_call / retrieval / eval / health_watch) over the gen_ai.* semantic conventions. Metrics panels read the first-class OTel counters/histogram the app exports (gen_ai.client.*). Logs panels (bottom row) read the correlated ERROR log records the app emits at each failure — each stamped with the failing span's traceId+spanId, so a log line deep-links to its trace. COST on the trace panels is derived by formula (tokens x price) because the exporter emits no cost attribute — see the PRICE PLACEHOLDER note; the metric cost panel uses the real emitted USD counter."
+      "description": "Agent-native observability for CasperAgent (Mastra + Fireworks) across all THREE OTLP signals — traces, metrics, AND logs. Traces panels filter on mastra.span.type (model_generation / tool_call / retrieval / eval / health_watch) over the gen_ai.* semantic conventions. Metrics panels read the first-class OTel counters/histogram the app exports (gen_ai.client.*). Logs panels (bottom row) read the correlated ERROR log records the app emits at each failure — each stamped with the failing span's traceId+spanId, so a log line deep-links to its trace. COST on the trace panels is derived by formula at the real Fireworks kimi-k2p7-code rates (a trace-side estimate that does not discount cache-read tokens); the metric cost panel (gen_ai.client.operation.cost) is the exact, cache-accurate USD counter. Trace aggregations filter casper.self_instrumented = true to exclude the duplicate spans the Mastra native exporter emits for the same call."
     },
     "variables": [],
     "panels": {
@@ -49,7 +49,7 @@
                           "stepInterval": 60,
                           "disabled": false,
                           "filter": {
-                            "expression": "mastra.span.type = 'model_generation'"
+                            "expression": "mastra.span.type = 'model_generation' AND casper.self_instrumented = true"
                           },
                           "having": {
                             "expression": ""
@@ -100,7 +100,7 @@
                           "stepInterval": 60,
                           "disabled": false,
                           "filter": {
-                            "expression": "mastra.span.type = 'model_generation'"
+                            "expression": "mastra.span.type = 'model_generation' AND casper.self_instrumented = true"
                           },
                           "having": {
                             "expression": ""
@@ -128,7 +128,7 @@
         "spec": {
           "display": {
             "name": "Est. cost (USD)",
-            "description": "Derived cost = input_tokens * PRICE_IN + output_tokens * PRICE_OUT. PRICE PLACEHOLDER: 0.0000009 USD/token (=$0.90 / 1M) for both, until real Fireworks glm-5p2 rates are set. Edit the two formula constants below to your actual per-token price."
+            "description": "Derived cost = input_tokens * PRICE_IN + output_tokens * PRICE_OUT, at the real Fireworks kimi-k2p7-code rates ($0.95 / 1M input = 0.00000095, $4.00 / 1M output = 0.000004). This is a trace-side ESTIMATE: it prices the whole input total at the input rate and does not discount cache-read tokens, so it slightly overstates spend on cache-heavy turns. The precise, cache-split figure is the metric cost panel (gen_ai.client.operation.cost) below — trust that for exact USD; use this for the trace-correlated breakdown by model."
           },
           "plugin": {
             "kind": "signoz/NumberPanel",
@@ -154,7 +154,7 @@
                           "stepInterval": 60,
                           "disabled": true,
                           "filter": {
-                            "expression": "mastra.span.type = 'model_generation'"
+                            "expression": "mastra.span.type = 'model_generation' AND casper.self_instrumented = true"
                           },
                           "having": {
                             "expression": ""
@@ -174,7 +174,7 @@
                           "stepInterval": 60,
                           "disabled": true,
                           "filter": {
-                            "expression": "mastra.span.type = 'model_generation'"
+                            "expression": "mastra.span.type = 'model_generation' AND casper.self_instrumented = true"
                           },
                           "having": {
                             "expression": ""
@@ -190,7 +190,7 @@
                         "type": "builder_formula",
                         "spec": {
                           "name": "F1",
-                          "expression": "A * 0.0000009 + B * 0.0000009",
+                          "expression": "A * 0.00000095 + B * 0.000004",
                           "disabled": false,
                           "legend": "est. cost (USD)"
                         }
@@ -234,7 +234,7 @@
                           "stepInterval": 60,
                           "disabled": false,
                           "filter": {
-                            "expression": "mastra.span.type = 'model_generation'"
+                            "expression": "mastra.span.type = 'model_generation' AND casper.self_instrumented = true"
                           },
                           "having": {
                             "expression": ""
@@ -285,7 +285,7 @@
                           "stepInterval": 60,
                           "disabled": false,
                           "filter": {
-                            "expression": "mastra.span.type = 'tool_call'"
+                            "expression": "mastra.span.type = 'tool_call' AND casper.self_instrumented = true"
                           },
                           "having": {
                             "expression": ""
@@ -336,7 +336,7 @@
                           "stepInterval": 60,
                           "disabled": false,
                           "filter": {
-                            "expression": "mastra.span.type = 'model_generation'"
+                            "expression": "mastra.span.type = 'model_generation' AND casper.self_instrumented = true"
                           },
                           "groupBy": [
                             {
@@ -364,7 +364,7 @@
                           "stepInterval": 60,
                           "disabled": false,
                           "filter": {
-                            "expression": "mastra.span.type = 'model_generation'"
+                            "expression": "mastra.span.type = 'model_generation' AND casper.self_instrumented = true"
                           },
                           "groupBy": [
                             {
@@ -397,7 +397,7 @@
         "spec": {
           "display": {
             "name": "Est. cost over time by model",
-            "description": "Derived cost per model. PRICE PLACEHOLDER 0.0000009 USD/token (=$0.90 / 1M) — replace with real Fireworks glm-5p2 rate in the F1 formula."
+            "description": "Derived cost per model at the real Fireworks kimi-k2p7-code rates ($0.95 / 1M input, $4.00 / 1M output). Trace-side estimate (no cache-read discount); the metric cost panel is the cache-accurate figure."
           },
           "plugin": {
             "kind": "signoz/TimeSeriesPanel",
@@ -423,7 +423,7 @@
                           "stepInterval": 60,
                           "disabled": true,
                           "filter": {
-                            "expression": "mastra.span.type = 'model_generation'"
+                            "expression": "mastra.span.type = 'model_generation' AND casper.self_instrumented = true"
                           },
                           "groupBy": [
                             {
@@ -450,7 +450,7 @@
                           "stepInterval": 60,
                           "disabled": true,
                           "filter": {
-                            "expression": "mastra.span.type = 'model_generation'"
+                            "expression": "mastra.span.type = 'model_generation' AND casper.self_instrumented = true"
                           },
                           "groupBy": [
                             {
@@ -473,7 +473,7 @@
                         "type": "builder_formula",
                         "spec": {
                           "name": "F1",
-                          "expression": "A * 0.0000009 + B * 0.0000009",
+                          "expression": "A * 0.00000095 + B * 0.000004",
                           "disabled": false,
                           "legend": "cost {{gen_ai.request.model}}"
                         }
@@ -517,7 +517,7 @@
                           "stepInterval": 60,
                           "disabled": false,
                           "filter": {
-                            "expression": "mastra.span.type = 'model_generation'"
+                            "expression": "mastra.span.type = 'model_generation' AND casper.self_instrumented = true"
                           },
                           "legend": "p50",
                           "having": {
@@ -538,7 +538,7 @@
                           "stepInterval": 60,
                           "disabled": false,
                           "filter": {
-                            "expression": "mastra.span.type = 'model_generation'"
+                            "expression": "mastra.span.type = 'model_generation' AND casper.self_instrumented = true"
                           },
                           "legend": "p95",
                           "having": {
@@ -559,7 +559,7 @@
                           "stepInterval": 60,
                           "disabled": false,
                           "filter": {
-                            "expression": "mastra.span.type = 'model_generation'"
+                            "expression": "mastra.span.type = 'model_generation' AND casper.self_instrumented = true"
                           },
                           "legend": "p99",
                           "having": {
@@ -611,7 +611,7 @@
                           "stepInterval": 60,
                           "disabled": false,
                           "filter": {
-                            "expression": "mastra.span.type = 'tool_call'"
+                            "expression": "mastra.span.type = 'tool_call' AND casper.self_instrumented = true"
                           },
                           "groupBy": [
                             {

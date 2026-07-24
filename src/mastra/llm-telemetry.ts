@@ -48,22 +48,34 @@ import { wrapLanguageModel, type LanguageModelMiddleware } from "ai";
 
 // Self-instrumented LLM telemetry.
 //
-// WHY THIS EXISTS: the Mastra observability pipeline does NOT get token usage
-// into SigNoz. Two independent gaps, both verified against the running stack:
-//   1. @mastra/core (streaming path) never writes `usage` onto the
-//      model_generation span's attributes — tokens live only on the generate()
-//      return value, on no span.
-//   2. @mastra/otel-exporter's converter only queues LEAF spans (processor_run,
-//      model_chunk) — it converts but never enqueues the parent spans
-//      (agent_run, model_generation), so they never reach the OTLP endpoint.
-// Net effect: `gen_ai.usage.*` never lands in SigNoz, and the cost/token
-// dashboards have no data source.
+// WHY THIS EXISTS: the Mastra pipeline does NOT get accurate, COST-bearing token
+// usage into SigNoz on its own. What it needs:
+//   1. @mastra/core (streaming path) doesn't reliably surface `usage` on a span
+//      you can aggregate — tokens ride the generate() return value.
+//   2. Mastra emits NO cost, its finish_reason is a raw `{unified,raw}` object,
+//      and there is no first-class OTel metrics pipeline (the OtelExporter has no
+//      onMetricEvent) — so SigNoz's native metrics store stays empty.
 //
 // FIX: wrap the language model with an AI SDK middleware that reads the REAL
 // usage the provider returns and emits ONE clean OTLP CLIENT span per LLM call,
-// on our own tracer, straight to SigNoz. This is independent of Mastra's broken
-// export and covers every call that goes through the wrapped model (agent turns,
-// tool sub-calls, and one-shot generateObject calls). No-op when SigNoz is off.
+// on our own `casper.llm` tracer, carrying cost + a normalized finish_reason,
+// PLUS first-class gen_ai.client.* metrics. Covers every wrapped-model call
+// (agent turns, tool sub-calls, one-shot generateObject). No-op when SigNoz off.
+//
+// CAVEAT — DUPLICATE SPANS (verified against prod SigNoz, @mastra/otel-exporter
+// v1.2.4): contrary to an earlier assumption that Mastra "never enqueues the
+// model_generation/tool_call parent spans", this exporter version DOES export
+// them — `_exportTracingEvent` queues every SPAN_ENDED regardless of type. So
+// for the same LLM/tool call SigNoz now holds TWO spans with the SAME
+// `mastra.span.type` (model_generation / tool_call): ours (scope `casper.llm`,
+// with cost + metrics) AND Mastra's native one (scope `@mastra/otel-exporter`,
+// no cost). Any panel/alert that aggregates on `mastra.span.type` alone
+// DOUBLE-COUNTS tokens/call-counts/latency. Fix lives dashboard-side: the
+// trace-based panels must additionally filter to our scope (or to the presence
+// of gen_ai.usage.cost). The native spans are still wanted for the trace tree +
+// the pipeline funnel (invoke_agent / model_inference), so we don't suppress
+// them — we just don't let their duplicate model_generation/tool_call rows skew
+// the aggregations. See deploy/signoz/dashboards + deploy/signoz/alerts.
 
 const SERVICE_NAME = "casper-assistant";
 
@@ -149,7 +161,15 @@ function finishReasonText(raw: unknown): string | undefined {
   if (typeof raw === "string") return raw;
   if (typeof raw === "object") {
     const o = raw as Record<string, unknown>;
-    const field = o.type ?? o.reason ?? o.finishReason ?? o.value;
+    // The AI SDK / Fireworks streaming path hands the middleware a
+    // `{ unified, raw }` shape (unified = the normalized reason "stop"/
+    // "tool-calls", raw = the provider's own string). Verified against prod
+    // spans: WITHOUT unwrapping these, JSON.stringify below shipped
+    // `{"unified":"stop","raw":"stop"}` as the finish reason — an unfilterable
+    // blob (57 of ~90 real spans). Prefer `unified` (normalized), then `raw`,
+    // then the older single-field shapes.
+    const field =
+      o.unified ?? o.raw ?? o.type ?? o.reason ?? o.finishReason ?? o.value;
     if (typeof field === "string") return field;
     // Unknown object shape: preserve the payload as JSON rather than lose it to
     // "[object Object]", so it stays inspectable even if not cleanly filterable.
@@ -548,6 +568,13 @@ function emitLlmSpan(args: {
   // model generation, so the label is accurate — it just also lets the existing
   // panels match without a schema change.
   span.setAttribute("mastra.span.type", "model_generation");
+  // De-dup marker. @mastra/otel-exporter ALSO emits a model_generation span for
+  // the same call (verified in prod), so a panel filtering on mastra.span.type
+  // alone double-counts. SigNoz v0.134's query-builder can't filter on the OTel
+  // instrumentation scope (scope.name resolves to the span name in its expression
+  // parser), so we stamp our own boolean marker and the dashboards/alerts add
+  // `AND casper.self_instrumented = true` to select ONLY our cost-bearing spans.
+  span.setAttribute("casper.self_instrumented", true);
   if (inputTokens !== undefined) {
     span.setAttribute("gen_ai.usage.input_tokens", inputTokens);
   }
@@ -928,6 +955,10 @@ function emitToolSpan(args: {
   span.setAttribute("gen_ai.tool.name", args.toolName);
   // Discriminator our versioned SigNoz dashboards/alerts filter on.
   span.setAttribute("mastra.span.type", "tool_call");
+  // De-dup marker: Mastra's native exporter also emits a tool_call span for the
+  // same execution, so the tool panels/alerts filter `AND
+  // casper.self_instrumented = true` to count ours only. See emitLlmSpan.
+  span.setAttribute("casper.self_instrumented", true);
   if (args.error) {
     span.setStatus({ code: SpanStatusCode.ERROR });
     span.setAttribute(

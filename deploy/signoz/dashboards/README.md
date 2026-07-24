@@ -75,10 +75,14 @@ provider alias the native dashboard uses to recognize an LLM span),
 The exporter does **not** emit a per-call cost attribute, so cost is computed by
 formula: `input_tokens * PRICE_IN + output_tokens * PRICE_OUT`.
 
-The committed value is a **PLACEHOLDER**: `0.0000009` USD/token (= $0.90 per 1M)
-for both input and output. **Replace both constants** in the `F1` formula
-`expression` (panels `Est. cost (USD)` and `Est. cost over time by model`) with
-the real Fireworks `glm-5p2` per-token rates before trusting the cost figures.
+The committed constants are the **real Fireworks kimi-k2p7-code rates**:
+`0.00000095` USD/token input (= $0.95 / 1M) and `0.000004` USD/token output
+(= $4.00 / 1M), in the `F1` formula `expression` (panels `Est. cost (USD)` and
+`Est. cost over time by model`). This trace-side figure prices the whole input
+total at the input rate (no cache-read discount), so it slightly overstates
+cache-heavy turns; the **metric cost panel** (`gen_ai.client.operation.cost`) is
+the cache-accurate, exact-USD source. If you switch models, update both
+constants to match your provider's per-token price.
 
 ### Import
 

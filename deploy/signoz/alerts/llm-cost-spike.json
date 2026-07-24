@@ -3,7 +3,7 @@
   "alertType": "TRACES_BASED_ALERT",
   "ruleType": "threshold_rule",
   "schemaVersion": "v2alpha1",
-  "description": "Estimated LLM spend in the evaluation window exceeded the target. Cost is DERIVED by formula (tokens x price) because the Mastra OtelExporter emits no cost attribute. PRICE PLACEHOLDER 0.0000009 USD/token (=$0.90 / 1M) for input and output — replace both constants in formula F1 with the real Fireworks glm-5p2 rate before relying on the dollar figure.",
+  "description": "Estimated LLM spend in the evaluation window exceeded the target. Cost is DERIVED by formula (tokens x price) at the real Fireworks kimi-k2p7-code rates ($0.95 / 1M input = 0.00000095, $4.00 / 1M output = 0.000004). This is a trace-side estimate (no cache-read discount, so it overstates on cache-heavy windows); the metric-based twin alert (llm-cost-spike-metric) fires on the precise gen_ai.client.operation.cost counter — prefer that one for exact-dollar paging.",
   "condition": {
     "compositeQuery": {
       "queries": [
@@ -15,7 +15,7 @@
             "stepInterval": 60,
             "disabled": true,
             "filter": {
-              "expression": "mastra.span.type = 'model_generation'"
+              "expression": "mastra.span.type = 'model_generation' AND casper.self_instrumented = true"
             },
             "having": {
               "expression": ""
@@ -35,7 +35,7 @@
             "stepInterval": 60,
             "disabled": true,
             "filter": {
-              "expression": "mastra.span.type = 'model_generation'"
+              "expression": "mastra.span.type = 'model_generation' AND casper.self_instrumented = true"
             },
             "having": {
               "expression": ""
@@ -51,7 +51,7 @@
           "type": "builder_formula",
           "spec": {
             "name": "F1",
-            "expression": "A * 0.0000009 + B * 0.0000009",
+            "expression": "A * 0.00000095 + B * 0.000004",
             "disabled": false,
             "legend": "est. cost (USD)"
           }

@@ -846,4 +846,30 @@ describe("gen_ai.response.finish_reasons", () => {
       JSON.stringify(span!.attributes["gen_ai.response.finish_reasons"]),
     ).not.toContain("[object Object]");
   });
+
+  // Regression (verified against prod SigNoz spans): the AI SDK / Fireworks
+  // streaming path returns finishReason as `{ unified, raw }` — NOT the
+  // `{ type }` shape above. The `type ?? reason ?? …` lookup missed it and fell
+  // through to JSON.stringify, shipping `{"unified":"stop","raw":"stop"}` as an
+  // unfilterable blob for 57 of ~90 real spans. Must unwrap `unified` (the
+  // normalized reason) to a clean string.
+  it("unwraps the { unified, raw } finishReason shape (AI SDK / Fireworks)", async () => {
+    const { mod, flush } = await loadWithCapturedSpans(VALID_SPAN);
+
+    await mod.llmTelemetryMiddleware.wrapGenerate!({
+      doGenerate: async () => ({
+        usage: { inputTokens: { total: 10 }, outputTokens: { total: 5 } },
+        finishReason: { unified: "tool-calls", raw: "tool_calls" },
+      }),
+      model: { modelId: "m", provider: "openai" },
+    } as never);
+
+    const span = (await flush()).find((s) => s.name.startsWith("chat "));
+    expect(span!.attributes["gen_ai.response.finish_reasons"]).toEqual([
+      "tool-calls",
+    ]);
+    expect(
+      JSON.stringify(span!.attributes["gen_ai.response.finish_reasons"]),
+    ).not.toContain("unified");
+  });
 });
