@@ -43,6 +43,19 @@ function meetingContextInstruction(botId: string): string {
   );
 }
 
+// The last user turn's text, flattened from its parts — the request we score the
+// answer's completeness against (see the drain below). Empty string if none.
+function lastUserText(messages: UIMessageLike[] | undefined): string {
+  const lastUser = [...(messages ?? [])]
+    .reverse()
+    .find((m) => m.role === "user");
+  return (lastUser?.parts ?? [])
+    .filter((p) => p.type === "text" && typeof p.text === "string")
+    .map((p) => p.text)
+    .join(" ")
+    .trim();
+}
+
 // Shape of what AssistantChatTransport injects into the body (assistant-ui):
 // tools: Record<name, { description?, parameters: JSONSchema7 }>.
 type FrontendToolJSONSchema = {
@@ -229,22 +242,41 @@ export async function POST(req: Request) {
   // e.g. Redis) — it guarantees the turn completes and is saved.
   const [clientBranch, serverBranch] = stream.tee();
 
+  // The user's request text for this turn — the last user message, flattened.
+  // Used to score the answer's completeness against what was asked (see below).
+  const promptText = lastUserText(messages);
+
   // Drain via getReader() (spec base, no reliance on Symbol.asyncIterator which
   // isn't guaranteed on every runtime's ReadableStream). We don't need the
-  // chunks, just the pull that keeps the agent loop — and its per-step saves —
-  // progressing to the end.
+  // chunks to display — but we DO accumulate the assistant's text so we can
+  // score answer quality once the turn completes (the pull also keeps the agent
+  // loop and its per-step saves progressing to the end).
   const drain = async () => {
     const reader = serverBranch.getReader();
+    let answerText = "";
     try {
       for (;;) {
-        const { done } = await reader.read();
+        const { done, value } = await reader.read();
         if (done) break;
+        // UIMessage v6 stream parts: accumulate text deltas for scoring.
+        const part = value as { type?: string; delta?: string; text?: string };
+        if (part?.type === "text-delta" && typeof part.delta === "string") {
+          answerText += part.delta;
+        }
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       log.error({ message }, "detached drain error");
     } finally {
       reader.releaseLock();
+    }
+    // Response-quality telemetry → SigNoz (deterministic, zero-LLM completeness
+    // score). Best-effort, no-op when SigNoz is off; never blocks the response.
+    try {
+      const { scoreAgentTurn } = await import("@/mastra/agent-quality");
+      await scoreAgentTurn({ promptText, answerText });
+    } catch {
+      /* quality scoring is best-effort */
     }
   };
 

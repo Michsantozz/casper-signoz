@@ -3,7 +3,12 @@
   "locked": false,
   "orgId": "",
   "name": "CasperAgent — Agent & LLM Observability",
-  "tags": ["casper", "llm", "agent", "hackathon"],
+  "tags": [
+    "casper",
+    "llm",
+    "agent",
+    "hackathon"
+  ],
   "schemaVersion": "v6",
   "source": "",
   "spec": {
@@ -22,7 +27,11 @@
           },
           "plugin": {
             "kind": "signoz/NumberPanel",
-            "spec": { "visualization": { "timePreference": "global_time" } }
+            "spec": {
+              "visualization": {
+                "timePreference": "global_time"
+              }
+            }
           },
           "queries": [
             {
@@ -39,9 +48,17 @@
                           "signal": "traces",
                           "stepInterval": 60,
                           "disabled": false,
-                          "filter": { "expression": "mastra.span.type = 'model_generation'" },
-                          "having": { "expression": "" },
-                          "aggregations": [{ "expression": "count()" }]
+                          "filter": {
+                            "expression": "mastra.span.type = 'model_generation'"
+                          },
+                          "having": {
+                            "expression": ""
+                          },
+                          "aggregations": [
+                            {
+                              "expression": "count()"
+                            }
+                          ]
                         }
                       }
                     ]
@@ -61,7 +78,11 @@
           },
           "plugin": {
             "kind": "signoz/NumberPanel",
-            "spec": { "visualization": { "timePreference": "global_time" } }
+            "spec": {
+              "visualization": {
+                "timePreference": "global_time"
+              }
+            }
           },
           "queries": [
             {
@@ -78,11 +99,19 @@
                           "signal": "traces",
                           "stepInterval": 60,
                           "disabled": false,
-                          "filter": { "expression": "mastra.span.type = 'model_generation'" },
-                          "having": { "expression": "" },
+                          "filter": {
+                            "expression": "mastra.span.type = 'model_generation'"
+                          },
+                          "having": {
+                            "expression": ""
+                          },
                           "aggregations": [
-                            { "expression": "sum(gen_ai.usage.input_tokens)" },
-                            { "expression": "sum(gen_ai.usage.output_tokens)" }
+                            {
+                              "expression": "sum(gen_ai.usage.input_tokens)"
+                            },
+                            {
+                              "expression": "sum(gen_ai.usage.output_tokens)"
+                            }
                           ]
                         }
                       }
@@ -103,7 +132,11 @@
           },
           "plugin": {
             "kind": "signoz/NumberPanel",
-            "spec": { "visualization": { "timePreference": "global_time" } }
+            "spec": {
+              "visualization": {
+                "timePreference": "global_time"
+              }
+            }
           },
           "queries": [
             {
@@ -120,9 +153,17 @@
                           "signal": "traces",
                           "stepInterval": 60,
                           "disabled": true,
-                          "filter": { "expression": "mastra.span.type = 'model_generation'" },
-                          "having": { "expression": "" },
-                          "aggregations": [{ "expression": "sum(gen_ai.usage.input_tokens)" }]
+                          "filter": {
+                            "expression": "mastra.span.type = 'model_generation'"
+                          },
+                          "having": {
+                            "expression": ""
+                          },
+                          "aggregations": [
+                            {
+                              "expression": "sum(gen_ai.usage.input_tokens)"
+                            }
+                          ]
                         }
                       },
                       {
@@ -132,9 +173,17 @@
                           "signal": "traces",
                           "stepInterval": 60,
                           "disabled": true,
-                          "filter": { "expression": "mastra.span.type = 'model_generation'" },
-                          "having": { "expression": "" },
-                          "aggregations": [{ "expression": "sum(gen_ai.usage.output_tokens)" }]
+                          "filter": {
+                            "expression": "mastra.span.type = 'model_generation'"
+                          },
+                          "having": {
+                            "expression": ""
+                          },
+                          "aggregations": [
+                            {
+                              "expression": "sum(gen_ai.usage.output_tokens)"
+                            }
+                          ]
                         }
                       },
                       {
@@ -163,7 +212,11 @@
           },
           "plugin": {
             "kind": "signoz/NumberPanel",
-            "spec": { "visualization": { "timePreference": "global_time" } }
+            "spec": {
+              "visualization": {
+                "timePreference": "global_time"
+              }
+            }
           },
           "queries": [
             {
@@ -180,9 +233,17 @@
                           "signal": "traces",
                           "stepInterval": 60,
                           "disabled": false,
-                          "filter": { "expression": "mastra.span.type = 'model_generation'" },
-                          "having": { "expression": "" },
-                          "aggregations": [{ "expression": "p95(duration_nano)" }]
+                          "filter": {
+                            "expression": "mastra.span.type = 'model_generation'"
+                          },
+                          "having": {
+                            "expression": ""
+                          },
+                          "aggregations": [
+                            {
+                              "expression": "p95(duration_nano)"
+                            }
+                          ]
                         }
                       }
                     ]
@@ -202,7 +263,11 @@
           },
           "plugin": {
             "kind": "signoz/NumberPanel",
-            "spec": { "visualization": { "timePreference": "global_time" } }
+            "spec": {
+              "visualization": {
+                "timePreference": "global_time"
+              }
+            }
           },
           "queries": [
             {
@@ -219,9 +284,17 @@
                           "signal": "traces",
                           "stepInterval": 60,
                           "disabled": false,
-                          "filter": { "expression": "mastra.span.type = 'tool_call'" },
-                          "having": { "expression": "" },
-                          "aggregations": [{ "expression": "count()" }]
+                          "filter": {
+                            "expression": "mastra.span.type = 'tool_call'"
+                          },
+                          "having": {
+                            "expression": ""
+                          },
+                          "aggregations": [
+                            {
+                              "expression": "count()"
+                            }
+                          ]
                         }
                       }
                     ]
@@ -241,7 +314,11 @@
           },
           "plugin": {
             "kind": "signoz/TimeSeriesPanel",
-            "spec": { "visualization": { "timePreference": "global_time" } }
+            "spec": {
+              "visualization": {
+                "timePreference": "global_time"
+              }
+            }
           },
           "queries": [
             {
@@ -258,13 +335,25 @@
                           "signal": "traces",
                           "stepInterval": 60,
                           "disabled": false,
-                          "filter": { "expression": "mastra.span.type = 'model_generation'" },
+                          "filter": {
+                            "expression": "mastra.span.type = 'model_generation'"
+                          },
                           "groupBy": [
-                            { "name": "gen_ai.request.model", "fieldDataType": "string", "fieldContext": "tag" }
+                            {
+                              "name": "gen_ai.request.model",
+                              "fieldDataType": "string",
+                              "fieldContext": "tag"
+                            }
                           ],
                           "legend": "in {{gen_ai.request.model}}",
-                          "having": { "expression": "" },
-                          "aggregations": [{ "expression": "sum(gen_ai.usage.input_tokens)" }]
+                          "having": {
+                            "expression": ""
+                          },
+                          "aggregations": [
+                            {
+                              "expression": "sum(gen_ai.usage.input_tokens)"
+                            }
+                          ]
                         }
                       },
                       {
@@ -274,13 +363,25 @@
                           "signal": "traces",
                           "stepInterval": 60,
                           "disabled": false,
-                          "filter": { "expression": "mastra.span.type = 'model_generation'" },
+                          "filter": {
+                            "expression": "mastra.span.type = 'model_generation'"
+                          },
                           "groupBy": [
-                            { "name": "gen_ai.request.model", "fieldDataType": "string", "fieldContext": "tag" }
+                            {
+                              "name": "gen_ai.request.model",
+                              "fieldDataType": "string",
+                              "fieldContext": "tag"
+                            }
                           ],
                           "legend": "out {{gen_ai.request.model}}",
-                          "having": { "expression": "" },
-                          "aggregations": [{ "expression": "sum(gen_ai.usage.output_tokens)" }]
+                          "having": {
+                            "expression": ""
+                          },
+                          "aggregations": [
+                            {
+                              "expression": "sum(gen_ai.usage.output_tokens)"
+                            }
+                          ]
                         }
                       }
                     ]
@@ -300,7 +401,11 @@
           },
           "plugin": {
             "kind": "signoz/TimeSeriesPanel",
-            "spec": { "visualization": { "timePreference": "global_time" } }
+            "spec": {
+              "visualization": {
+                "timePreference": "global_time"
+              }
+            }
           },
           "queries": [
             {
@@ -317,12 +422,24 @@
                           "signal": "traces",
                           "stepInterval": 60,
                           "disabled": true,
-                          "filter": { "expression": "mastra.span.type = 'model_generation'" },
+                          "filter": {
+                            "expression": "mastra.span.type = 'model_generation'"
+                          },
                           "groupBy": [
-                            { "name": "gen_ai.request.model", "fieldDataType": "string", "fieldContext": "tag" }
+                            {
+                              "name": "gen_ai.request.model",
+                              "fieldDataType": "string",
+                              "fieldContext": "tag"
+                            }
                           ],
-                          "having": { "expression": "" },
-                          "aggregations": [{ "expression": "sum(gen_ai.usage.input_tokens)" }]
+                          "having": {
+                            "expression": ""
+                          },
+                          "aggregations": [
+                            {
+                              "expression": "sum(gen_ai.usage.input_tokens)"
+                            }
+                          ]
                         }
                       },
                       {
@@ -332,12 +449,24 @@
                           "signal": "traces",
                           "stepInterval": 60,
                           "disabled": true,
-                          "filter": { "expression": "mastra.span.type = 'model_generation'" },
+                          "filter": {
+                            "expression": "mastra.span.type = 'model_generation'"
+                          },
                           "groupBy": [
-                            { "name": "gen_ai.request.model", "fieldDataType": "string", "fieldContext": "tag" }
+                            {
+                              "name": "gen_ai.request.model",
+                              "fieldDataType": "string",
+                              "fieldContext": "tag"
+                            }
                           ],
-                          "having": { "expression": "" },
-                          "aggregations": [{ "expression": "sum(gen_ai.usage.output_tokens)" }]
+                          "having": {
+                            "expression": ""
+                          },
+                          "aggregations": [
+                            {
+                              "expression": "sum(gen_ai.usage.output_tokens)"
+                            }
+                          ]
                         }
                       },
                       {
@@ -366,7 +495,11 @@
           },
           "plugin": {
             "kind": "signoz/TimeSeriesPanel",
-            "spec": { "visualization": { "timePreference": "global_time" } }
+            "spec": {
+              "visualization": {
+                "timePreference": "global_time"
+              }
+            }
           },
           "queries": [
             {
@@ -383,10 +516,18 @@
                           "signal": "traces",
                           "stepInterval": 60,
                           "disabled": false,
-                          "filter": { "expression": "mastra.span.type = 'model_generation'" },
+                          "filter": {
+                            "expression": "mastra.span.type = 'model_generation'"
+                          },
                           "legend": "p50",
-                          "having": { "expression": "" },
-                          "aggregations": [{ "expression": "p50(duration_nano)" }]
+                          "having": {
+                            "expression": ""
+                          },
+                          "aggregations": [
+                            {
+                              "expression": "p50(duration_nano)"
+                            }
+                          ]
                         }
                       },
                       {
@@ -396,10 +537,18 @@
                           "signal": "traces",
                           "stepInterval": 60,
                           "disabled": false,
-                          "filter": { "expression": "mastra.span.type = 'model_generation'" },
+                          "filter": {
+                            "expression": "mastra.span.type = 'model_generation'"
+                          },
                           "legend": "p95",
-                          "having": { "expression": "" },
-                          "aggregations": [{ "expression": "p95(duration_nano)" }]
+                          "having": {
+                            "expression": ""
+                          },
+                          "aggregations": [
+                            {
+                              "expression": "p95(duration_nano)"
+                            }
+                          ]
                         }
                       },
                       {
@@ -409,10 +558,18 @@
                           "signal": "traces",
                           "stepInterval": 60,
                           "disabled": false,
-                          "filter": { "expression": "mastra.span.type = 'model_generation'" },
+                          "filter": {
+                            "expression": "mastra.span.type = 'model_generation'"
+                          },
                           "legend": "p99",
-                          "having": { "expression": "" },
-                          "aggregations": [{ "expression": "p99(duration_nano)" }]
+                          "having": {
+                            "expression": ""
+                          },
+                          "aggregations": [
+                            {
+                              "expression": "p99(duration_nano)"
+                            }
+                          ]
                         }
                       }
                     ]
@@ -432,7 +589,11 @@
           },
           "plugin": {
             "kind": "signoz/TablePanel",
-            "spec": { "visualization": { "timePreference": "global_time" } }
+            "spec": {
+              "visualization": {
+                "timePreference": "global_time"
+              }
+            }
           },
           "queries": [
             {
@@ -449,13 +610,25 @@
                           "signal": "traces",
                           "stepInterval": 60,
                           "disabled": false,
-                          "filter": { "expression": "mastra.span.type = 'tool_call'" },
+                          "filter": {
+                            "expression": "mastra.span.type = 'tool_call'"
+                          },
                           "groupBy": [
-                            { "name": "gen_ai.tool.name", "fieldDataType": "string", "fieldContext": "tag" }
+                            {
+                              "name": "gen_ai.tool.name",
+                              "fieldDataType": "string",
+                              "fieldContext": "tag"
+                            }
                           ],
                           "legend": "{{gen_ai.tool.name}}",
-                          "having": { "expression": "" },
-                          "aggregations": [{ "expression": "count()" }]
+                          "having": {
+                            "expression": ""
+                          },
+                          "aggregations": [
+                            {
+                              "expression": "count()"
+                            }
+                          ]
                         }
                       }
                     ]
@@ -475,7 +648,11 @@
           },
           "plugin": {
             "kind": "signoz/TablePanel",
-            "spec": { "visualization": { "timePreference": "global_time" } }
+            "spec": {
+              "visualization": {
+                "timePreference": "global_time"
+              }
+            }
           },
           "queries": [
             {
@@ -492,13 +669,127 @@
                           "signal": "traces",
                           "stepInterval": 60,
                           "disabled": false,
-                          "filter": { "expression": "error.type EXISTS" },
+                          "filter": {
+                            "expression": "error.type EXISTS"
+                          },
                           "groupBy": [
-                            { "name": "error.type", "fieldDataType": "string", "fieldContext": "tag" }
+                            {
+                              "name": "error.type",
+                              "fieldDataType": "string",
+                              "fieldContext": "tag"
+                            }
                           ],
                           "legend": "{{error.type}}",
-                          "having": { "expression": "" },
-                          "aggregations": [{ "expression": "count()" }]
+                          "having": {
+                            "expression": ""
+                          },
+                          "aggregations": [
+                            {
+                              "expression": "count()"
+                            }
+                          ]
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "bbbbbbbb-0000-0000-0000-0000000000q1": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Answer quality (avg completeness)",
+            "description": "Deterministic completeness score of the agent's answers (0..1), zero-LLM. mastra.span.type = eval."
+          },
+          "plugin": {
+            "kind": "signoz/NumberPanel",
+            "spec": {
+              "visualization": {
+                "timePreference": "global_time"
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "scalar",
+              "spec": {
+                "plugin": {
+                  "kind": "signoz/CompositeQuery",
+                  "spec": {
+                    "queries": [
+                      {
+                        "type": "builder_query",
+                        "spec": {
+                          "name": "A",
+                          "signal": "traces",
+                          "stepInterval": 60,
+                          "disabled": false,
+                          "filter": {
+                            "expression": "mastra.span.type = 'eval'"
+                          },
+                          "having": {
+                            "expression": ""
+                          },
+                          "aggregations": [
+                            {
+                              "expression": "avg(mastra.eval.score)"
+                            }
+                          ]
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "bbbbbbbb-0000-0000-0000-0000000000q2": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Answer quality over time",
+            "description": "avg completeness score per interval — the third axis: is the agent's answer quality drifting?"
+          },
+          "plugin": {
+            "kind": "signoz/TimeSeriesPanel",
+            "spec": {
+              "visualization": {
+                "timePreference": "global_time"
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "time_series",
+              "spec": {
+                "plugin": {
+                  "kind": "signoz/CompositeQuery",
+                  "spec": {
+                    "queries": [
+                      {
+                        "type": "builder_query",
+                        "spec": {
+                          "name": "A",
+                          "signal": "traces",
+                          "stepInterval": 60,
+                          "disabled": false,
+                          "filter": {
+                            "expression": "mastra.span.type = 'eval'"
+                          },
+                          "having": {
+                            "expression": ""
+                          },
+                          "aggregations": [
+                            {
+                              "expression": "avg(mastra.eval.score)"
+                            }
+                          ]
                         }
                       }
                     ]
@@ -515,16 +806,114 @@
         "kind": "Grid",
         "spec": {
           "items": [
-            { "x": 0, "y": 0, "width": 2, "height": 3, "content": { "$ref": "#/spec/panels/11111111-1111-1111-1111-111111111111" } },
-            { "x": 2, "y": 0, "width": 3, "height": 3, "content": { "$ref": "#/spec/panels/22222222-2222-2222-2222-222222222222" } },
-            { "x": 5, "y": 0, "width": 3, "height": 3, "content": { "$ref": "#/spec/panels/33333333-3333-3333-3333-333333333333" } },
-            { "x": 8, "y": 0, "width": 2, "height": 3, "content": { "$ref": "#/spec/panels/44444444-4444-4444-4444-444444444444" } },
-            { "x": 10, "y": 0, "width": 2, "height": 3, "content": { "$ref": "#/spec/panels/55555555-5555-5555-5555-555555555555" } },
-            { "x": 0, "y": 3, "width": 6, "height": 5, "content": { "$ref": "#/spec/panels/66666666-6666-6666-6666-666666666666" } },
-            { "x": 6, "y": 3, "width": 6, "height": 5, "content": { "$ref": "#/spec/panels/77777777-7777-7777-7777-777777777777" } },
-            { "x": 0, "y": 8, "width": 12, "height": 5, "content": { "$ref": "#/spec/panels/88888888-8888-8888-8888-888888888888" } },
-            { "x": 0, "y": 13, "width": 6, "height": 5, "content": { "$ref": "#/spec/panels/99999999-9999-9999-9999-999999999999" } },
-            { "x": 6, "y": 13, "width": 6, "height": 5, "content": { "$ref": "#/spec/panels/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" } }
+            {
+              "x": 0,
+              "y": 0,
+              "width": 2,
+              "height": 3,
+              "content": {
+                "$ref": "#/spec/panels/11111111-1111-1111-1111-111111111111"
+              }
+            },
+            {
+              "x": 2,
+              "y": 0,
+              "width": 3,
+              "height": 3,
+              "content": {
+                "$ref": "#/spec/panels/22222222-2222-2222-2222-222222222222"
+              }
+            },
+            {
+              "x": 5,
+              "y": 0,
+              "width": 3,
+              "height": 3,
+              "content": {
+                "$ref": "#/spec/panels/33333333-3333-3333-3333-333333333333"
+              }
+            },
+            {
+              "x": 8,
+              "y": 0,
+              "width": 2,
+              "height": 3,
+              "content": {
+                "$ref": "#/spec/panels/44444444-4444-4444-4444-444444444444"
+              }
+            },
+            {
+              "x": 10,
+              "y": 0,
+              "width": 2,
+              "height": 3,
+              "content": {
+                "$ref": "#/spec/panels/55555555-5555-5555-5555-555555555555"
+              }
+            },
+            {
+              "x": 0,
+              "y": 3,
+              "width": 6,
+              "height": 5,
+              "content": {
+                "$ref": "#/spec/panels/66666666-6666-6666-6666-666666666666"
+              }
+            },
+            {
+              "x": 6,
+              "y": 3,
+              "width": 6,
+              "height": 5,
+              "content": {
+                "$ref": "#/spec/panels/77777777-7777-7777-7777-777777777777"
+              }
+            },
+            {
+              "x": 0,
+              "y": 8,
+              "width": 12,
+              "height": 5,
+              "content": {
+                "$ref": "#/spec/panels/88888888-8888-8888-8888-888888888888"
+              }
+            },
+            {
+              "x": 0,
+              "y": 13,
+              "width": 6,
+              "height": 5,
+              "content": {
+                "$ref": "#/spec/panels/99999999-9999-9999-9999-999999999999"
+              }
+            },
+            {
+              "x": 6,
+              "y": 13,
+              "width": 6,
+              "height": 5,
+              "content": {
+                "$ref": "#/spec/panels/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+              }
+            },
+            {
+              "x": 0,
+              "y": 18,
+              "width": 2,
+              "height": 3,
+              "content": {
+                "$ref": "#/spec/panels/bbbbbbbb-0000-0000-0000-0000000000q1"
+              }
+            },
+            {
+              "x": 2,
+              "y": 18,
+              "width": 6,
+              "height": 3,
+              "content": {
+                "$ref": "#/spec/panels/bbbbbbbb-0000-0000-0000-0000000000q2"
+              }
+            }
           ]
         }
       }

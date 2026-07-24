@@ -49,7 +49,9 @@ let tracerProvider: BasicTracerProvider | undefined;
 // Lazily build a dedicated tracer provider that ships to SigNoz over OTLP. We
 // own this provider (not the global) so it can't collide with Mastra's exporter
 // or Sentry's instrumentation. Returns undefined when SIGNOZ is not configured.
-function getTracer() {
+// Exported so sibling instrumentation (agent-quality.ts) shares the same OTLP
+// provider/flush instead of standing up a second one.
+export function getSignozTracer() {
   const endpoint = process.env.SIGNOZ_ENDPOINT;
   if (!endpoint && !process.env.SIGNOZ_API_KEY) return undefined;
 
@@ -120,7 +122,7 @@ function emitLlmSpan(args: {
   finishReason?: string;
   error?: unknown;
 }) {
-  const tracer = getTracer();
+  const tracer = getSignozTracer();
   if (!tracer) return;
 
   const { inputTokens, outputTokens, cacheReadTokens } = extractUsage(
@@ -271,7 +273,7 @@ function emitToolSpan(args: {
   durationMs: number;
   error?: unknown;
 }) {
-  const tracer = getTracer();
+  const tracer = getSignozTracer();
   if (!tracer) return;
 
   const span = tracer.startSpan(
@@ -364,7 +366,7 @@ function emitRetrievalSpan(args: {
   durationMs: number;
   error?: unknown;
 }) {
-  const tracer = getTracer();
+  const tracer = getSignozTracer();
   if (!tracer) return;
 
   const span = tracer.startSpan(

@@ -1,0 +1,81 @@
+{
+  "alert": "CasperAgent — answer quality low",
+  "alertType": "TRACES_BASED_ALERT",
+  "ruleType": "threshold_rule",
+  "schemaVersion": "v2alpha1",
+  "description": "Average answer-completeness score (mastra.span.type = 'eval', mastra.eval.score, 0..1) dropped below target. This is the QUALITY axis — the agent is answering less completely than usual (a prompt/model regression, a truncation cap, or a degraded retrieval). Deterministic, zero-LLM score, so this is cheap to watch continuously.",
+  "condition": {
+    "compositeQuery": {
+      "queries": [
+        {
+          "type": "builder_query",
+          "spec": {
+            "name": "A",
+            "signal": "traces",
+            "stepInterval": 60,
+            "disabled": false,
+            "filter": {
+              "expression": "mastra.span.type = 'eval'"
+            },
+            "having": {
+              "expression": ""
+            },
+            "aggregations": [
+              {
+                "expression": "avg(mastra.eval.score)"
+              }
+            ]
+          }
+        }
+      ],
+      "panelType": "graph",
+      "queryType": "builder",
+      "unit": ""
+    },
+    "selectedQueryName": "A",
+    "thresholds": {
+      "kind": "basic",
+      "spec": [
+        {
+          "name": "warning",
+          "target": 0.4,
+          "targetUnit": "",
+          "matchType": "at_least_once",
+          "op": "below",
+          "channels": [
+            "casper-default"
+          ]
+        }
+      ]
+    }
+  },
+  "labels": {
+    "severity": "warning",
+    "component": "quality"
+  },
+  "annotations": {
+    "summary": "Agent answer quality below threshold ({{$threshold}})",
+    "description": "avg completeness score reached {{$value}} (0..1)."
+  },
+  "evaluation": {
+    "kind": "rolling",
+    "spec": {
+      "evalWindow": "15m",
+      "frequency": "5m"
+    }
+  },
+  "notificationSettings": {
+    "groupBy": [
+      "mastra.eval.scorer"
+    ],
+    "renotify": {
+      "enabled": true,
+      "interval": "1h",
+      "alertStates": [
+        "firing"
+      ]
+    },
+    "usePolicy": false
+  },
+  "disabled": false
+}
