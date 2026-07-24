@@ -69,6 +69,11 @@ const nextConfig: NextConfig = {
   // pnpm usa symlinks em node_modules; sem tracingRoot explícito o file-tracing
   // do standalone pode perder deps e o server quebra em runtime. Fixa a raiz.
   outputFileTracingRoot: path.join(__dirname),
+  // NOTA: o canal Slack do sreAgent depende do pacote `chat` (Vercel Chat SDK),
+  // carregado por @mastra/core via import() dinâmico. O file-tracing do standalone
+  // não enxerga essa cadeia; a closure é injetada na imagem pelo Dockerfile
+  // (scripts/collect-chat-closure.mjs) em vez de outputFileTracingIncludes — que
+  // não copia as deps transitivas por baixo dos symlinks do pnpm de forma confiável.
   // Build ID estável entre imagens/ambientes. Sem isto cada `next build` gera
   // um ID novo → version skew (assets 404, "Failed to find Server Action") em
   // rolling deploy. Injetado via CI (git SHA); cai no default se ausente.

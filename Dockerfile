@@ -43,6 +43,13 @@ ENV GIT_HASH=$GIT_HASH
 
 RUN pnpm build
 
+# Closure do pacote `chat` (Vercel Chat SDK) para o canal Slack do sreAgent.
+# @mastra/core (external) carrega `chat` via import() dinâmico, então o file-tracing
+# do standalone poda a árvore inteira dele (chat + remark/mdast/micromark, ~110
+# dirs .pnpm). Computamos a closure completa aqui e a copiamos p/ o runner — ver
+# scripts/collect-chat-closure.mjs. Determinístico, ~63MB, fim do whack-a-mole.
+RUN node scripts/collect-chat-closure.mjs /chat-closure/node_modules/.pnpm
+
 # ---- runner --------------------------------------------------------------
 FROM base AS runner
 WORKDIR /app
@@ -76,6 +83,18 @@ USER node
 # neste projeto; se criar, adicione a linha COPY correspondente.)
 COPY --from=builder --chown=node:node /app/.next/standalone ./
 COPY --from=builder --chown=node:node /app/.next/static ./.next/static
+
+# Slack ChatOps (sreAgent): injeta a closure do `chat` que o standalone podou.
+# 1) Copia os ~110 dirs .pnpm da árvore do `chat` (staging /chat-closure do builder)
+#    para dentro do node_modules/.pnpm do standalone — MERGE, preserva os symlinks
+#    internos do pnpm, então as deps do chat (remark/mdast/micromark/ai/zod)
+#    resolvem entre si.
+# 2) Recria o symlink de topo node_modules/chat → .pnpm/chat@..., que @mastra/core
+#    precisa para resolver o `import('chat')` dinâmico. Sem ele: ERR_MODULE_NOT_FOUND
+#    ("Cannot find package 'chat'") e a rota do webhook Slack responde 503.
+COPY --from=builder --chown=node:node /chat-closure/node_modules/.pnpm ./node_modules/.pnpm
+RUN set -e; cd node_modules; \
+    ln -sfn "$(ls -d .pnpm/chat@*/node_modules/chat | head -1)" chat
 
 EXPOSE 3000
 # SIGTERM p/ shutdown gracioso: Next drena requests in-flight + callbacks after().
