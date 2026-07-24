@@ -96,6 +96,18 @@ const togglesSchema = z.object({
   SIGNOZ_MCP_URL: z.string().optional(),
   SIGNOZ_MCP_API_KEY: z.string().optional(),
   SIGNOZ_INSTANCE_URL: z.string().optional(),
+  // Slack channel for the sreAgent (ChatOps: mention/DM the SRE-copilot in
+  // Slack and it investigates via the SigNoz MCP tools). Wired through Mastra's
+  // native `channels` config (@chat-adapter/slack under the hood). All-or-
+  // nothing: without SLACK_BOT_TOKEN the agent registers no Slack adapter, so
+  // no webhook route is generated and the feature is a safe no-op.
+  //   - SLACK_BOT_TOKEN: bot token (`xoxb-...`) from OAuth & Permissions.
+  //   - SLACK_SIGNING_SECRET: Basic Information → App Credentials; the adapter
+  //     uses it to verify inbound webhook signatures (5-min timestamp window).
+  // The generated webhook is POST /api/agents/sreAgent/channels/slack/webhook —
+  // point the Slack app's Event Subscriptions + Interactivity request URLs there.
+  SLACK_BOT_TOKEN: z.string().optional(),
+  SLACK_SIGNING_SECRET: z.string().optional(),
   // Sentry error tracking — grouping + alerting for the cron/webhook/enrich
   // paths that today only console.error into stdout. Optional: absent → the SDK
   // is never initialized (pure no-op, see sentry.server.config.ts). Set the DSN
