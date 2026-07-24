@@ -4,11 +4,15 @@ Canonical SigNoz alert rules (`schemaVersion: v2alpha1`, `threshold_rule`,
 rolling evaluation) over the OTLP traces **and metrics** the app exports. One
 rule per file.
 
-Two rule families ship: **traces-based** (aggregate over span attributes — work
-even if only traces flow) and **metric-based** (read the first-class OTel metrics
-the app now exports via the metrics pipeline — no derived-cost placeholder, and
-metric-native evaluation). The metric twins are preferred once the metrics
-pipeline is confirmed flowing; the traces rules stay as a fallback.
+Three rule families ship: **traces-based** (aggregate over span attributes — work
+even if only traces flow), **metric-based** (read the first-class OTel metrics the
+app exports via the metrics pipeline — no derived-cost placeholder, metric-native
+evaluation), and **logs-based** (`llm-error-logs.json` — reads the correlated ERROR
+log records the app emits at each failure, directly off the logs signal). The
+metric twins are preferred once the metrics pipeline is confirmed flowing; the
+traces rules stay as a fallback. The logs rule is the failure alert with the
+tightest pivot: each matching log carries the failing span's traceId+spanId, so
+from the alert you jump to the exact span in the waterfall.
 
 | File | Signal | Fires when | Group by |
 |------|--------|-----------|----------|
@@ -17,6 +21,7 @@ pipeline is confirmed flowing; the traces rules stay as a fallback.
 | `llm-cost-spike.json` | traces | derived cost (formula over token sums) > $5 in the window | — |
 | `llm-cost-spike-metric.json` | **metric** | `increase` of `gen_ai.client.operation.cost` counter (real USD) > $5 in the window | — |
 | `tool-call-failures.json` | traces | `count()` of `tool_call` spans with `error.type` > 5 in the window | `gen_ai.tool.name` |
+| `llm-error-logs.json` | **logs** | `count()` of correlated ERROR log records (`gen_ai.operation.name EXISTS`) > 5 in the window | `gen_ai.operation.name` |
 | `answer-quality-low.json` | traces | avg answer completeness below target | — |
 | `health-watch-down.json` | traces | any `health_watch` span with `mastra.health_watch.ok = false` | `error.type` |
 

@@ -1,0 +1,88 @@
+{
+  "alert": "CasperAgent — LLM/tool error logs",
+  "alertType": "LOGS_BASED_ALERT",
+  "ruleType": "threshold_rule",
+  "schemaVersion": "v2alpha1",
+  "description": "Correlated ERROR log records the app emits at each failure (gen_ai.operation.name EXISTS isolates them from Mastra's internal log noise) crossed the threshold in the window. Reads the LOGS signal — the fifth pillar — not traces: it fires on the log stream directly. Each matching log carries the failing span's traceId+spanId, so from the alert you pivot to the exact failing span in the trace waterfall.",
+  "condition": {
+    "compositeQuery": {
+      "queries": [
+        {
+          "type": "builder_query",
+          "spec": {
+            "name": "A",
+            "signal": "logs",
+            "stepInterval": 60,
+            "disabled": false,
+            "filter": {
+              "expression": "gen_ai.operation.name EXISTS"
+            },
+            "groupBy": [
+              {
+                "name": "gen_ai.operation.name",
+                "fieldDataType": "string",
+                "fieldContext": "attribute"
+              }
+            ],
+            "legend": "{{gen_ai.operation.name}}",
+            "having": {
+              "expression": ""
+            },
+            "aggregations": [
+              {
+                "expression": "count()"
+              }
+            ]
+          }
+        }
+      ],
+      "panelType": "graph",
+      "queryType": "builder",
+      "unit": "none"
+    },
+    "selectedQueryName": "A",
+    "thresholds": {
+      "kind": "basic",
+      "spec": [
+        {
+          "name": "critical",
+          "target": 5,
+          "matchType": "at_least_once",
+          "op": "above",
+          "channels": [
+            "casper-default"
+          ]
+        }
+      ]
+    }
+  },
+  "labels": {
+    "severity": "critical",
+    "component": "agent-logs"
+  },
+  "annotations": {
+    "summary": "Error logs above {{$threshold}} in window",
+    "description": "{{$value}} correlated ERROR log records observed in the window (grouped by gen_ai.operation.name)."
+  },
+  "evaluation": {
+    "kind": "rolling",
+    "spec": {
+      "evalWindow": "5m",
+      "frequency": "1m"
+    }
+  },
+  "notificationSettings": {
+    "groupBy": [
+      "gen_ai.operation.name"
+    ],
+    "renotify": {
+      "enabled": true,
+      "interval": "1h",
+      "alertStates": [
+        "firing"
+      ]
+    },
+    "usePolicy": false
+  },
+  "disabled": false
+}

@@ -58,7 +58,16 @@ export function createObservability(): Observability {
   // in PG (via MastraStorageExporter) and do NOT travel over OTLP. Those same
   // numbers still reach SigNoz as span attributes (`gen_ai.usage.*`, span
   // durations), so cost/latency dashboards are built there from traces, not from
-  // a metrics pipeline. Two modes, env-toggled:
+  // a metrics pipeline.
+  //
+  // Signals split by owner: this exporter's LOGS are Mastra's INTERNAL log events
+  // (sparse, whatever Mastra decides to log). The app's own first-class,
+  // trace-CORRELATED metrics AND ERROR logs come from `llm-telemetry.ts`, which
+  // stands up its own OTLP MeterProvider + LoggerProvider and emits records
+  // stamped with the failing span's traceId/spanId. So SigNoz gets all three
+  // signals; the correlated ones are self-instrumented, not from here.
+  //
+  // Two modes, env-toggled:
   //   - Self-host: SIGNOZ_ENDPOINT set (e.g. http://localhost:4318/v1/traces)
   //     and NO api key → OTLP `custom` provider, no ingestion header. This is
   //     the local docker path; the built-in `signoz` provider can't be used

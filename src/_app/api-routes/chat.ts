@@ -7,6 +7,7 @@ import { isBotOwner } from "@/server/recall/ownership";
 import { checkRateLimit, rateLimitedResponse } from "@/shared/lib/rate-limit";
 import { assertBodyWithinLimit } from "@/shared/lib/http";
 import { createLogger } from "@/shared/lib/logger";
+import { beginTurnTrace } from "@/mastra/llm-telemetry";
 
 const log = createLogger("chat");
 
@@ -184,6 +185,13 @@ export async function POST(req: Request) {
   // write is a safe UPDATE, never a racing INSERT that violates the PK and loops
   // the turn (see ensureMastraResource). Only when memory is active for this turn.
   if (threadId) await ensureMastraResource(session.user.id);
+
+  // Open the per-turn trace holder BEFORE the stream is built, so the LLM spans
+  // emitted while the agent runs register this turn's trace ref, and the after()
+  // answer-quality scorer can join the SAME trace (its own context is long gone
+  // by then). enterWith-based → covers the stream, the agent generator, and the
+  // detached drain without wrapping the whole body. See mastra/llm-telemetry.ts.
+  beginTurnTrace();
 
   // version:'v6' required — assistant-ui types against AI SDK v6.
   const stream = await handleChatStream({

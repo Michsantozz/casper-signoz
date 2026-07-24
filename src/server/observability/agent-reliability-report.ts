@@ -40,6 +40,65 @@ export type AgentReliabilityReportResult = {
   notified: number;
 };
 
+// The report drives the sreAgent, which talks to an LLM and the SigNoz MCP over
+// the network — either can stall WITHOUT ever rejecting. A bare `await` on a hung
+// generate() never returns: the Inngest step neither completes nor errors, so the
+// weekly digest produces NO output and NO notification, going silent exactly when
+// the stack it reports on is unhealthy. Cap it. Heavier than the 15-min health
+// watch (it aggregates two 7-day windows), so a larger bound — but still bounded.
+// Mirrors the hardening in agent-health-watch.ts.
+const REPORT_TIMEOUT_MS = 10 * 60_000;
+
+class ReportTimeoutError extends Error {
+  constructor(ms: number) {
+    super(`reliability-report agent run exceeded ${ms}ms`);
+    this.name = "ReportTimeoutError";
+  }
+}
+
+function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new ReportTimeoutError(ms)), ms);
+    work.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error as Error);
+      },
+    );
+  });
+}
+
+// A failed report is itself a signal: emit it as a span so "the weekly digest
+// stopped working" is queryable in SigNoz instead of only showing up as a missing
+// notification. mastra.span.type = "reliability_report" is the discriminator.
+// Lazy import (mastra pulls in server modules — same cycle-avoidance as below).
+async function emitReportFailureSpan(args: {
+  error: unknown;
+  durationMs: number;
+}) {
+  const { getSignozTracer } = await import("@/mastra/llm-telemetry");
+  const tracer = getSignozTracer();
+  if (!tracer) return;
+
+  const { SpanKind, SpanStatusCode } = await import("@opentelemetry/api");
+  const span = tracer.startSpan("agent_reliability_report", {
+    kind: SpanKind.INTERNAL,
+    startTime: new Date(Date.now() - args.durationMs),
+  });
+  span.setAttribute("mastra.span.type", "reliability_report");
+  span.setAttribute("mastra.reliability_report.ok", false);
+  span.setAttribute(
+    "error.type",
+    args.error instanceof Error ? args.error.name : "unknown",
+  );
+  span.setStatus({ code: SpanStatusCode.ERROR });
+  span.end();
+}
+
 /**
  * Runs one reliability-report pass. `notify` (default true) controls whether the
  * digest is fanned out as a notification — a manual demo trigger can turn it off
@@ -58,12 +117,49 @@ export async function runAgentReliabilityReport(opts?: {
     return { ran: false, summary: "sreAgent not registered", notified: 0 };
   }
 
-  const res = await agent.generate(REPORT_PROMPT);
-  const summary =
-    (res?.text ?? "").trim() || "Reliability report produced no output.";
+  // The report itself must never hang or crash the tick. A bare throw/hang here
+  // fails the Inngest step with no output and no notification — the failure mode
+  // of a health digest is that it goes quiet exactly when the stack is sick.
+  // Bound it, catch, emit a span so the failure is itself observable, and carry on
+  // to notify the operator that the report couldn't run.
+  let summary: string;
+  let failed = false;
+  const started = Date.now();
+  try {
+    const res = await withTimeout(
+      agent.generate(REPORT_PROMPT),
+      REPORT_TIMEOUT_MS,
+    );
+    summary =
+      (res?.text ?? "").trim() || "Reliability report produced no output.";
+  } catch (error) {
+    failed = true;
+    const reason =
+      error instanceof Error ? `${error.name}: ${error.message}` : "unknown";
+    summary = `Reliability report FAILED to run (${reason}). The week-over-week digest could not query telemetry this cycle.`;
+    await emitReportFailureSpan({
+      error,
+      durationMs: Date.now() - started,
+    }).catch(() => {
+      /* observability of the observer is best-effort */
+    });
+  }
 
+  // Force-flush the telemetry this pass emitted (the SRE-copilot's own LLM +
+  // tool_call spans). A cron tick can be short-lived; without this the batch
+  // processors might not export before the run settles. No-op when SigNoz is off.
+  try {
+    const { flushLlmTelemetry } = await import("@/mastra/llm-telemetry");
+    await flushLlmTelemetry();
+  } catch {
+    /* flush is best-effort */
+  }
+
+  // `ran` reports whether the report actually completed — a timed-out/errored
+  // pass still returns (and still notifies, so the silence is broken), but it
+  // must not read as a successful report to any caller or test.
   if (!notify) {
-    return { ran: true, summary, notified: 0 };
+    return { ran: !failed, summary, notified: 0 };
   }
 
   // Fleet-health digest → surface to every operator (no per-user scope: this is
@@ -76,5 +172,5 @@ export async function runAgentReliabilityReport(opts?: {
     message: summary.slice(0, 500),
   });
 
-  return { ran: true, summary, notified: userIds.length };
+  return { ran: !failed, summary, notified: userIds.length };
 }

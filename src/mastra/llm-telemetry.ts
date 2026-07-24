@@ -1,5 +1,6 @@
 import "server-only";
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import {
   context,
   metrics,
@@ -7,15 +8,27 @@ import {
   SpanKind,
   SpanStatusCode,
   TraceFlags,
+  type AttributeValue,
   type Context,
   type Counter,
   type Histogram,
   type Meter,
+  type Span,
 } from "@opentelemetry/api";
+import {
+  logs,
+  SeverityNumber,
+  type Logger as OtelLogger,
+} from "@opentelemetry/api-logs";
 import { getCurrentSpan } from "@mastra/core/observability/context-storage";
+import { OTLPLogExporter } from "@opentelemetry/exporter-logs-otlp-proto";
 import { OTLPMetricExporter } from "@opentelemetry/exporter-metrics-otlp-proto";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-proto";
 import { resourceFromAttributes } from "@opentelemetry/resources";
+import {
+  LoggerProvider,
+  BatchLogRecordProcessor,
+} from "@opentelemetry/sdk-logs";
 import {
   MeterProvider,
   PeriodicExportingMetricReader,
@@ -92,7 +105,7 @@ function signozResource() {
 // metrics get POSTed to the traces path — the collector 404s/ignores them and
 // the metric panels stay empty with no error anywhere. Parse the URL instead and
 // rewrite the SIGNAL SEGMENT explicitly, so any shape resolves correctly.
-function otlpEndpoint(signal: "traces" | "metrics"): string {
+function otlpEndpoint(signal: "traces" | "metrics" | "logs"): string {
   const raw = process.env.SIGNOZ_ENDPOINT;
   if (!raw) return `http://localhost:4318/v1/${signal}`;
 
@@ -272,11 +285,106 @@ function getInstruments() {
   return instruments;
 }
 
-// Flush pending spans + metrics (call on graceful shutdown / after a one-shot
-// script). Metrics flush forces the reader to export before exit.
+// ────────────────────────────────────────────────────────────────────────
+// Logs pipeline (OTLP) — the SIXTH-signal completer, but really the one that
+// makes SigNoz's "correlate signals" story land: a first-class LOG record for
+// each failure, stamped with the SAME traceId/spanId as the error span.
+//
+// WHY: Mastra's OtelExporter forwards logs only from ITS OWN internal log events
+// (onLogEvent) — sparse, uncorrelated to our self-instrumented LLM/tool/retrieval
+// spans, and driven by whatever Mastra decides to log. So the Logs tab in SigNoz
+// stayed effectively empty and no dashboard/alert read the logs signal. This adds
+// a dedicated OTLP LoggerProvider (twin of the tracer + meter above) and emits ONE
+// correlated ERROR log per failure at the exact point we already emit the error
+// span. The log carries the failing span's trace context (via LogRecord.context →
+// the SDK stamps traceId+spanId), so in SigNoz you click a log line and jump
+// straight to the failing span in the trace waterfall — cross-signal correlation,
+// not just "logs also exist". Same env toggle as tracer/meter; no-op when SigNoz
+// is unconfigured.
+// ────────────────────────────────────────────────────────────────────────
+
+let loggerProvider: LoggerProvider | undefined;
+
+function getSignozLogger(): OtelLogger | undefined {
+  if (!process.env.SIGNOZ_ENDPOINT && !process.env.SIGNOZ_API_KEY) {
+    return undefined;
+  }
+
+  if (!loggerProvider) {
+    const headers = process.env.SIGNOZ_API_KEY
+      ? { "signoz-access-token": process.env.SIGNOZ_API_KEY }
+      : undefined;
+
+    loggerProvider = new LoggerProvider({
+      resource: signozResource(),
+      processors: [
+        new BatchLogRecordProcessor(
+          new OTLPLogExporter({ url: otlpEndpoint("logs"), headers }),
+        ),
+      ],
+    });
+    // Register globally so any OTel-aware library log rides the same provider
+    // instead of standing up a second (never-flushed) one.
+    logs.setGlobalLoggerProvider(loggerProvider);
+  }
+
+  return loggerProvider.getLogger("casper.llm");
+}
+
+// Emit ONE correlated OTLP ERROR log for a failure. The whole point is the
+// `context`: passing the error span stamps this record with that span's exact
+// traceId+spanId (the SDK reads LogRecord.context → trace.getSpanContext), so the
+// log line links back to the precise failing span in the waterfall. Falls back to
+// Mastra's active-span context when no span is handed in. No-op when SigNoz is off;
+// never throws (a telemetry failure must never break the request path).
+function emitErrorLog(args: {
+  operation: string;
+  body: string;
+  error: unknown;
+  span?: Span;
+  attributes?: Record<string, AttributeValue>;
+}) {
+  try {
+    const logger = getSignozLogger();
+    if (!logger) return;
+
+    const errType = args.error instanceof Error ? args.error.name : "unknown";
+    const errMsg =
+      args.error instanceof Error ? args.error.message : String(args.error);
+
+    logger.emit({
+      severityNumber: SeverityNumber.ERROR,
+      severityText: "ERROR",
+      body: args.body,
+      attributes: {
+        "gen_ai.operation.name": args.operation,
+        // Bounded label set, same discipline as the metric error label, so the
+        // logs-by-type panel/alert group on a closed set.
+        "error.type": errorMetricLabel(args.error),
+        // OTel exception semconv — SigNoz's log view renders these specially.
+        "exception.type": errType,
+        "exception.message": errMsg,
+        ...args.attributes,
+      },
+      // Correlate to the SAME trace/span as the error span. When we have the
+      // span, use its context so the log's spanId === the failing span's spanId
+      // (click the log → land on that exact span). Else fall back to Mastra's
+      // active agent span so the log at least joins the turn's trace.
+      context: args.span
+        ? trace.setSpan(context.active(), args.span)
+        : mastraParentContext(),
+    });
+  } catch {
+    // Best-effort: never let a logging failure escape onto the request path.
+  }
+}
+
+// Flush pending spans + metrics + logs (call on graceful shutdown / after a
+// one-shot script). Forces each provider to export before exit.
 export async function flushLlmTelemetry() {
   await tracerProvider?.forceFlush().catch(() => {});
   await meterProvider?.forceFlush().catch(() => {});
+  await loggerProvider?.forceFlush().catch(() => {});
 }
 
 // ── Shutdown flush ──────────────────────────────────────────────────────────
@@ -387,12 +495,34 @@ function emitLlmSpan(args: {
 
   const priceIn = pricePerToken("LLM_PRICE_INPUT_PER_MTOK");
   const priceOut = pricePerToken("LLM_PRICE_OUTPUT_PER_MTOK");
+  // Cache tokens are priced DIFFERENTLY from fresh input: providers bill
+  // cache-read at a fraction of input (~0.1x on Anthropic) and cache-write at a
+  // premium (~1.25x). Optional — when unset, each falls back to the plain input
+  // price (previous behavior), so cost is never fabricated from a missing env.
+  const priceCacheRead =
+    pricePerToken("LLM_PRICE_CACHE_READ_PER_MTOK") ?? priceIn;
+  const priceCacheWrite =
+    pricePerToken("LLM_PRICE_CACHE_WRITE_PER_MTOK") ?? priceIn;
+  // AI SDK v3 reports inputTokens.total INCLUSIVE of cache read+write. Pricing
+  // the whole total at the input rate double-charges cache the wrong way (see
+  // above). Split it: fresh input at priceIn, each cache class at its own rate.
   const cost =
     priceIn !== undefined &&
     priceOut !== undefined &&
     inputTokens !== undefined &&
     outputTokens !== undefined
-      ? inputTokens * priceIn + outputTokens * priceOut
+      ? (() => {
+          const cacheRead = cacheReadTokens ?? 0;
+          const cacheWrite = cacheWriteTokens ?? 0;
+          // Never let rounding/reporting quirks make fresh input negative.
+          const freshInput = Math.max(0, inputTokens - cacheRead - cacheWrite);
+          return (
+            freshInput * priceIn +
+            cacheRead * (priceCacheRead ?? priceIn) +
+            cacheWrite * (priceCacheWrite ?? priceIn) +
+            outputTokens * priceOut
+          );
+        })()
       : undefined;
 
   // Start the span in an empty context so it's a clean root (we don't have
@@ -459,6 +589,18 @@ function emitLlmSpan(args: {
     // GenAI-semconv error attribute — the native SigNoz AI dashboard groups its
     // error panel by gen_ai.error.type. Same value as error.type; additive.
     span.setAttribute("gen_ai.error.type", errType);
+    // Correlated ERROR log: same trace/span as this failing LLM span, so the
+    // Logs tab links back to the exact call in the waterfall.
+    emitErrorLog({
+      operation: "chat",
+      body: `LLM call failed: ${args.modelId} (${errType})`,
+      error: args.error,
+      span,
+      attributes: {
+        "gen_ai.request.model": args.modelId,
+        "gen_ai.provider.name": args.provider,
+      },
+    });
   }
   span.end();
 
@@ -493,6 +635,11 @@ function emitLlmSpan(args: {
     inst.duration.record(args.durationMs / 1000, {
       ...base,
       "gen_ai.operation.name": "chat",
+      // Bounded error label — same discipline as the tool/retrieval duration
+      // metrics. Without it a failed call (fast 401 / slow timeout) lands in the
+      // SAME histogram as successes, silently skewing the p95 latency panel with
+      // no way to filter. "none" on the success path keeps the series stable.
+      "error.type": errorMetricLabel(args.error),
     });
   }
 }
@@ -554,7 +701,53 @@ function errorMetricLabel(error: unknown): string {
 const SPAN_ID_RE = /^[0-9a-f]{16}$/;
 const TRACE_ID_RE = /^[0-9a-f]{32}$/;
 
-function mastraParentContext(): Context {
+// A trace ref (traceId + a spanId in it) we can forge an OTel parent from.
+type TraceLink = { traceId: string; spanId: string };
+
+// Per-turn holder for the turn's trace ref. The answer-quality span is scored in
+// Next's after() — LONG after the agent span (and Mastra's getCurrentSpan ALS)
+// are gone — so it can't parent itself the way LLM/tool spans do inline. We
+// stash the turn's trace ref HERE while the agent is live, then the after()
+// scorer reads it to join the SAME trace. Next preserves the request's ALS
+// snapshot into after(), and the agent generator (created inside runWithTurnTrace)
+// restores this store when it resumes — so both sides share one holder. Purely a
+// correlation aid: if it's ever empty (ALS didn't propagate), the eval span
+// falls back to a detached root — no worse than before, never throws.
+const turnTraceStore = new AsyncLocalStorage<{ link?: TraceLink }>();
+
+// Wrap a request turn so spans emitted during it can register their trace ref
+// for the later after() scorer. No-op-safe: nested calls just reuse the store.
+export function runWithTurnTrace<T>(fn: () => T): T {
+  return turnTraceStore.run({}, fn);
+}
+
+// enterWith variant for a request handler: opens the holder for the CURRENT
+// async context (and everything downstream — the stream, the agent generator,
+// the after() drain) without wrapping the whole body in a callback. Safe because
+// each Next request handler runs in its own async context, so this never leaks
+// across requests. Idempotent: skips if a holder is already open.
+export function beginTurnTrace(): void {
+  if (!turnTraceStore.getStore()) turnTraceStore.enterWith({});
+}
+
+// The turn's trace ref, if any LLM span registered one this turn. Read in after().
+export function currentTurnLink(): TraceLink | undefined {
+  return turnTraceStore.getStore()?.link;
+}
+
+// Forge a non-recording OTel parent context from a trace ref, so a span started
+// with it joins that existing trace as a child. Same mechanism as
+// mastraParentContext, but from an explicitly captured ref (survives after()).
+export function parentContextFromLink(link: TraceLink): Context {
+  return trace.setSpanContext(context.active(), {
+    traceId: link.traceId,
+    spanId: link.spanId,
+    traceFlags: TraceFlags.SAMPLED,
+    isRemote: true,
+  });
+}
+
+export function mastraParentContext(): Context {
   try {
     const span = getCurrentSpan() as
       | { id?: string; traceId?: string }
@@ -567,6 +760,10 @@ function mastraParentContext(): Context {
       SPAN_ID_RE.test(spanId) &&
       TRACE_ID_RE.test(traceId)
     ) {
+      // Register the FIRST valid ref this turn so the after() answer-quality
+      // scorer can join this trace. First = closest to the agent_run root.
+      const store = turnTraceStore.getStore();
+      if (store && !store.link) store.link = { traceId, spanId };
       return trace.setSpanContext(context.active(), {
         traceId,
         spanId,
@@ -614,13 +811,44 @@ export const llmTelemetryMiddleware: LanguageModelMiddleware = {
 
   wrapStream: async ({ doStream, model }) => {
     const started = Date.now();
-    const { stream, ...rest } = await doStream();
 
     let usage: unknown;
     let finishReason: string | undefined;
     // Timestamp of the first content chunk — for time-to-first-token. Set once,
     // on the earliest text/reasoning delta the model streams.
     let firstChunkAt: number | undefined;
+    // Guard: the span is emitted exactly once, whichever terminal event wins
+    // (finish → flush, in-band error part, or stream setup rejection). Without
+    // this an error part followed by a graceful close would double-emit.
+    let emitted = false;
+
+    const emitOnce = (extra: { error?: unknown }) => {
+      if (emitted) return;
+      emitted = true;
+      emitLlmSpan({
+        modelId: model.modelId,
+        provider: providerOf(model),
+        usage,
+        durationMs: Date.now() - started,
+        finishReason,
+        ttftMs:
+          firstChunkAt !== undefined ? firstChunkAt - started : undefined,
+        error: extra.error,
+      });
+    };
+
+    let stream: ReadableStream;
+    let rest: Record<string, unknown>;
+    try {
+      // A synchronous stream-setup failure (auth, rate-limit, transport error
+      // BEFORE the first chunk) rejects here. wrapGenerate catches its
+      // equivalent; wrapStream must too — otherwise the error path of the
+      // MAJORITY flow (every chat turn streams) emits no span at all.
+      ({ stream, ...rest } = await doStream());
+    } catch (error) {
+      emitOnce({ error });
+      throw error;
+    }
 
     // Tap the stream to capture the terminal usage without altering it. The AI
     // SDK emits a "finish" part carrying usage + finishReason at stream end.
@@ -639,18 +867,22 @@ export const llmTelemetryMiddleware: LanguageModelMiddleware = {
             usage = chunk.usage;
             finishReason = finishReasonText(chunk.finishReason);
           }
+          // In-band error: the SDK streams an "error" part instead of rejecting
+          // the stream. flush() still runs on close, so WITHOUT this the span
+          // would be emitted as a SUCCESS and mask the failure. Emit an error
+          // span now; the emitted-guard makes the later flush() a no-op.
+          if (chunk?.type === "error") {
+            emitOnce({
+              error:
+                (chunk as { error?: unknown }).error ??
+                new Error("stream error"),
+            });
+          }
           controller.enqueue(chunk);
         },
         flush() {
-          emitLlmSpan({
-            modelId: model.modelId,
-            provider: providerOf(model),
-            usage,
-            durationMs: Date.now() - started,
-            finishReason,
-            ttftMs:
-              firstChunkAt !== undefined ? firstChunkAt - started : undefined,
-          });
+          // Graceful close (success, or after an already-emitted error part).
+          emitOnce({});
         },
       }),
     );
@@ -702,6 +934,14 @@ function emitToolSpan(args: {
       "error.type",
       args.error instanceof Error ? args.error.name : "unknown",
     );
+    // Correlated ERROR log for the failing tool, linked to this span.
+    emitErrorLog({
+      operation: "execute_tool",
+      body: `Tool failed: ${args.toolName}`,
+      error: args.error,
+      span,
+      attributes: { "gen_ai.tool.name": args.toolName },
+    });
   }
   span.end();
 
@@ -822,6 +1062,14 @@ function emitRetrievalSpan(args: {
       "error.type",
       args.error instanceof Error ? args.error.name : "unknown",
     );
+    // Correlated ERROR log for the failing retrieval hop, linked to this span.
+    emitErrorLog({
+      operation: "retrieve",
+      body: `Retrieval failed: ${args.indexName}`,
+      error: args.error,
+      span,
+      attributes: { "db.collection.name": args.indexName },
+    });
   }
   span.end();
 

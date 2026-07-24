@@ -438,6 +438,85 @@ describe("emitLlmSpan — attributes + parenting (SigNoz on)", () => {
   });
 });
 
+describe("wrapStream — error paths emit a span (SigNoz on)", () => {
+  it("emits an ERROR span when doStream() rejects at setup (auth/rate-limit)", async () => {
+    // The MAJORITY flow streams; a setup rejection here must not leave the turn
+    // with no span at all (the whole point of the instrumentation is seeing the
+    // failed call). Mirrors wrapGenerate's catch.
+    const { mod, flush } = await loadWithCapturedSpans(VALID_SPAN);
+    const boom = new Error("RateLimit");
+    boom.name = "RateLimitError";
+    await expect(
+      mod.llmTelemetryMiddleware.wrapStream!({
+        doStream: async () => {
+          throw boom;
+        },
+        model: { modelId: "m", provider: "p" },
+      } as never),
+    ).rejects.toBe(boom);
+    const span = (await flush()).find((s) => s.name.startsWith("chat "));
+    expect(span).toBeDefined();
+    expect(span!.status.code).toBe(2); // ERROR
+    expect(span!.attributes["error.type"]).toBe("RateLimitError");
+    expect(span!.attributes["gen_ai.error.type"]).toBe("RateLimitError");
+  });
+
+  it("emits an ERROR span on an in-band error chunk, NOT a masked success", async () => {
+    // The SDK streams an `error` part instead of rejecting. Without handling it
+    // the tap would run flush() and emit a SUCCESS span — masking the failure.
+    const { mod, flush } = await loadWithCapturedSpans(VALID_SPAN);
+    const source = new ReadableStream({
+      start(c) {
+        c.enqueue({ type: "text-delta", delta: "partial" });
+        c.enqueue({ type: "error", error: new TypeError("mid-stream") });
+        c.close();
+      },
+    });
+    const { stream } = (await mod.llmTelemetryMiddleware.wrapStream!({
+      doStream: async () => ({ stream: source }),
+      model: { modelId: "m", provider: "p" },
+    } as never)) as { stream: ReadableStream };
+    // Drain so the tap runs.
+    const reader = stream.getReader();
+    for (;;) {
+      const { done } = await reader.read();
+      if (done) break;
+    }
+    const chatSpans = (await flush()).filter((s) => s.name.startsWith("chat "));
+    expect(chatSpans).toHaveLength(1); // exactly one — emitted-guard, no double
+    expect(chatSpans[0]!.status.code).toBe(2); // ERROR, not masked success
+    expect(chatSpans[0]!.attributes["error.type"]).toBe("TypeError");
+  });
+});
+
+describe("emitLlmSpan — cache-aware cost (SigNoz on)", () => {
+  it("prices cache-read/write at their own rates, not the full input rate", async () => {
+    // inputTokens.total INCLUDES cache read+write. With distinct cache prices the
+    // fresh-input fraction is billed at priceIn and each cache class at its rate.
+    process.env.LLM_PRICE_INPUT_PER_MTOK = "10";
+    process.env.LLM_PRICE_OUTPUT_PER_MTOK = "30";
+    process.env.LLM_PRICE_CACHE_READ_PER_MTOK = "1"; // ~0.1x input
+    process.env.LLM_PRICE_CACHE_WRITE_PER_MTOK = "12"; // ~1.25x input
+    const { mod, flush } = await loadWithCapturedSpans(VALID_SPAN);
+    await mod.llmTelemetryMiddleware.wrapGenerate!({
+      doGenerate: async () => ({
+        usage: {
+          inputTokens: { total: 1000, cacheRead: 600, cacheWrite: 100 },
+          outputTokens: { total: 200 },
+        },
+        finishReason: "stop",
+      }),
+      model: { modelId: "m", provider: "p" },
+    } as never);
+    const span = (await flush()).find((s) => s.name.startsWith("chat "));
+    // fresh = 1000-600-100 = 300. cost = 300*10 + 600*1 + 100*12 + 200*30, /1e6
+    //       = (3000 + 600 + 1200 + 6000)/1e6 = 10800/1e6 = 0.0108
+    expect(span!.attributes["gen_ai.usage.cost"]).toBeCloseTo(0.0108, 6);
+    delete process.env.LLM_PRICE_CACHE_READ_PER_MTOK;
+    delete process.env.LLM_PRICE_CACHE_WRITE_PER_MTOK;
+  });
+});
+
 describe("emitToolSpan — attributes + parenting (SigNoz on)", () => {
   it("emits gen_ai.tool.name + error status, parented under Mastra", async () => {
     const { mod, flush } = await loadWithCapturedSpans(VALID_SPAN);
@@ -460,6 +539,149 @@ describe("emitToolSpan — attributes + parenting (SigNoz on)", () => {
     expect(span!.attributes["error.type"]).toBe("Error");
     expect(span!.status.code).toBe(2); // SpanStatusCode.ERROR
     expect(span!.parentSpanContext?.spanId).toBe(VALID_SPAN.id);
+  });
+});
+
+// ── Correlated ERROR logs: the LOGS signal (SigNoz on) ───────────────────────
+//
+// The dashboard's Logs panels + the logs-based alert read a first-class LOG
+// record the app emits at each failure. The value isn't "logs also exist" — it's
+// CORRELATION: every error log must carry the failing span's traceId+spanId so a
+// judge can click a log line and land on the exact span in the waterfall. A
+// silent regress here (log emitted with no context, or on the wrong trace) breaks
+// the one thing the fifth signal is here to prove. Keep the whole OTel logs stack
+// real; mock only the OTLP log exporter into an in-memory collector.
+async function loadWithCapturedLogs(activeSpan: unknown) {
+  const { InMemorySpanExporter } = await import(
+    "@opentelemetry/sdk-trace-base"
+  );
+  const { InMemoryLogRecordExporter } = await import(
+    "@opentelemetry/sdk-logs"
+  );
+  const spanCollector = new InMemorySpanExporter();
+  const logCollector = new InMemoryLogRecordExporter();
+
+  vi.doMock("@opentelemetry/exporter-trace-otlp-proto", () => ({
+    OTLPTraceExporter: class {
+      export(spans: unknown, cb: (r: unknown) => void) {
+        return spanCollector.export(spans as never, cb);
+      }
+      shutdown() {
+        return spanCollector.shutdown();
+      }
+      forceFlush() {
+        return Promise.resolve();
+      }
+    },
+  }));
+  vi.doMock("@opentelemetry/exporter-metrics-otlp-proto", () => ({
+    OTLPMetricExporter: class {
+      export(_m: unknown, cb: (r: unknown) => void) {
+        cb({ code: 0 });
+      }
+      shutdown() {
+        return Promise.resolve();
+      }
+      forceFlush() {
+        return Promise.resolve();
+      }
+    },
+  }));
+  vi.doMock("@opentelemetry/exporter-logs-otlp-proto", () => ({
+    OTLPLogExporter: class {
+      export(recs: unknown, cb: (r: unknown) => void) {
+        return logCollector.export(recs as never, cb);
+      }
+      shutdown() {
+        return logCollector.shutdown();
+      }
+      forceFlush() {
+        return Promise.resolve();
+      }
+    },
+  }));
+  vi.doMock("@mastra/core/observability/context-storage", () => ({
+    getCurrentSpan: () => activeSpan,
+  }));
+
+  process.env.SIGNOZ_ENDPOINT = "http://localhost:4318/v1/traces";
+
+  const mod = await import("@/mastra/llm-telemetry");
+  const flush = async () => {
+    await mod.flushLlmTelemetry();
+    return {
+      spans: spanCollector.getFinishedSpans(),
+      logs: logCollector.getFinishedLogRecords(),
+    };
+  };
+  return { mod, flush };
+}
+
+describe("emitErrorLog — correlated ERROR logs (SigNoz on)", () => {
+  it("emits ONE ERROR log for a failing LLM call, stamped with the span's trace/span id", async () => {
+    const { mod, flush } = await loadWithCapturedLogs(VALID_SPAN);
+    const boom = new Error("provider 500");
+    boom.name = "APICallError";
+    await expect(
+      mod.llmTelemetryMiddleware.wrapGenerate!({
+        doGenerate: async () => {
+          throw boom;
+        },
+        model: { modelId: "glm-5p2", provider: "openai" },
+      } as never),
+    ).rejects.toBe(boom);
+
+    const { spans, logs } = await flush();
+    const chatSpan = spans.find((s) => s.name.startsWith("chat "));
+    expect(chatSpan).toBeDefined();
+
+    // Exactly one correlated log — not zero (silent), not double.
+    expect(logs).toHaveLength(1);
+    const rec = logs[0]!;
+    expect(rec.severityNumber).toBe(17); // SeverityNumber.ERROR
+    expect(rec.attributes["gen_ai.operation.name"]).toBe("chat");
+    expect(rec.attributes["error.type"]).toBe("APICallError"); // bounded label
+    expect(rec.attributes["gen_ai.request.model"]).toBe("glm-5p2");
+    // THE correlation contract: the log carries the failing span's exact ids, so
+    // the Logs tab deep-links to that span in the trace waterfall.
+    expect(rec.spanContext?.traceId).toBe(VALID_SPAN.traceId);
+    expect(rec.spanContext?.spanId).toBe(chatSpan!.spanContext().spanId);
+  });
+
+  it("emits a correlated ERROR log for a failing tool call", async () => {
+    const { mod, flush } = await loadWithCapturedLogs(VALID_SPAN);
+    const wrapped = mod.withToolTelemetry(
+      {
+        id: "flaky_tool",
+        execute: async () => {
+          throw new Error("boom");
+        },
+      },
+      "flaky_tool",
+    );
+    await expect((wrapped.execute as () => Promise<unknown>)()).rejects.toThrow(
+      "boom",
+    );
+
+    const { spans, logs } = await flush();
+    const toolSpan = spans.find((s) => s.name.startsWith("execute_tool "));
+    expect(logs).toHaveLength(1);
+    expect(logs[0]!.attributes["gen_ai.operation.name"]).toBe("execute_tool");
+    expect(logs[0]!.attributes["gen_ai.tool.name"]).toBe("flaky_tool");
+    expect(logs[0]!.spanContext?.spanId).toBe(toolSpan!.spanContext().spanId);
+  });
+
+  it("does NOT emit a log on the success path (logs are failure-only)", async () => {
+    const { mod, flush } = await loadWithCapturedLogs(VALID_SPAN);
+    await mod.llmTelemetryMiddleware.wrapGenerate!({
+      doGenerate: async () => ({
+        usage: { inputTokens: { total: 10 }, outputTokens: { total: 5 } },
+        finishReason: "stop",
+      }),
+      model: { modelId: "m", provider: "p" },
+    } as never);
+    const { logs } = await flush();
+    expect(logs).toHaveLength(0);
   });
 });
 

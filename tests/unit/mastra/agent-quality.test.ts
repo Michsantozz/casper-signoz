@@ -42,9 +42,16 @@ afterEach(() => {
 
 // Keep the OTel stack real (provider, tracer, span) and capture what actually
 // gets emitted — mocking the tracer would prove nothing about the attributes.
-async function loadWithCapturedSpans() {
+async function loadWithCapturedSpans(activeSpan?: unknown) {
   const { InMemorySpanExporter } = await import("@opentelemetry/sdk-trace-base");
   const collector = new InMemorySpanExporter();
+
+  // Let a test simulate Mastra's live agent span so an LLM span registers the
+  // turn's trace ref (what the after() eval span later joins). Undefined by
+  // default → no active span, same as the real no-Mastra-context case.
+  vi.doMock("@mastra/core/observability/context-storage", () => ({
+    getCurrentSpan: () => activeSpan,
+  }));
 
   vi.doMock("@opentelemetry/exporter-trace-otlp-proto", () => ({
     OTLPTraceExporter: class {
@@ -134,6 +141,42 @@ describe("emitEvalSpan — the attributes the quality dashboard filters on", () 
     expect(span!.attributes["mastra.span.type"]).toBe("eval");
     expect(span!.attributes["mastra.eval.scorer"]).toBe("completeness");
     expect(span!.attributes["mastra.eval.score"]).toBe(0.42);
+  });
+
+  it("joins the turn's trace via the captured link (score lands in the waterfall)", async () => {
+    // The eval span is scored in after(), when Mastra's own span context is gone.
+    // A trace ref captured while the agent was live lets it join the SAME trace,
+    // so a judge can click a bad turn and see its quality score in the waterfall.
+    const traceId = "4bf92f3577b34da6a3ce929d0e0e4736";
+    const spanId = "00f067aa0ba902b7";
+    // Active Mastra span → the turn's LLM span registers this ref in the holder.
+    const { quality, flush } = await loadWithCapturedSpans({
+      id: spanId,
+      traceId,
+      type: "agent_run",
+      name: "agent",
+    });
+    const telemetry = await import("@/mastra/llm-telemetry");
+
+    // Run the scoring inside a turn holder that the live LLM span populates,
+    // exactly as a real chat turn would before after() scores it.
+    await telemetry.runWithTurnTrace(async () => {
+      // Drive a real LLM span through the holder so currentTurnLink() fills in.
+      await telemetry.llmTelemetryMiddleware.wrapGenerate!({
+        doGenerate: async () => ({
+          usage: { inputTokens: { total: 1 }, outputTokens: { total: 1 } },
+          finishReason: "stop",
+        }),
+        model: { modelId: "m", provider: "p" },
+      } as never);
+      await quality.scoreAgentTurn({ promptText: "q", answerText: "a" });
+    });
+
+    const evalSpan = (await flush()).find((s) => s.name.startsWith("eval "));
+    expect(evalSpan).toBeDefined();
+    // Same trace as the turn's LLM span, parented under the captured ref.
+    expect(evalSpan!.spanContext().traceId).toBe(traceId);
+    expect(evalSpan!.parentSpanContext?.spanId).toBe(spanId);
   });
 
   it("passes the prompt and answer to the scorer as user/assistant messages", async () => {

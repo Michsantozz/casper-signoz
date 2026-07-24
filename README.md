@@ -1,24 +1,49 @@
-# 🎙️ Casper Agent
+# 🛰️ Casper Agent — E2E Observability for a Real AI Agent
 
 [![CI](https://github.com/Michsantozz/karaforcasper/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Michsantozz/karaforcasper/actions/workflows/ci.yml)
 ![Next.js](https://img.shields.io/badge/Next.js-16-black?logo=nextdotjs)
-![React](https://img.shields.io/badge/React-19-149eca?logo=react)
+![OpenTelemetry](https://img.shields.io/badge/OpenTelemetry-native-f5a800?logo=opentelemetry)
+![SigNoz](https://img.shields.io/badge/SigNoz-traces·metrics·logs-e75a34)
 ![TypeScript](https://img.shields.io/badge/TypeScript-6-3178c6?logo=typescript)
-![Node](https://img.shields.io/badge/Node-%E2%89%A524-339933?logo=nodedotjs)
-![pnpm](https://img.shields.io/badge/pnpm-11.11-f69220?logo=pnpm)
 
-**The AI meeting assistant that reads the room — not just the transcript.**
+> **🏆 Agents of SigNoz — Track 01 · AI & Agent Observability.**
+> **Three** of the track's example builds, in one project: **an AI agent with full E2E observability on SigNoz**, a **SRE Sidekick built on the SigNoz MCP**, and an **Observability Slackbot** (`@casper why did latency spike?` → the SRE-copilot investigates in SigNoz and answers in-thread). Not a toy instrumented for a demo — a **live, multi-tenant production app** whose every agent run, LLM call, tool, RAG hop, and workflow is traced, measured, and alertable in SigNoz.
 
-Casper records your Zoom/Meet/Teams calls, turns them into actionable minutes, and — the part most note-takers skip — measures *how your team actually interacted*: who dominated, who went quiet, where the tension was, and how that shifts across meetings. All through chat.
+**If you can't observe your AI agent, you don't own it.** Casper is a real meeting assistant (schedules bots, records calls, writes minutes, reads team dynamics) — and it is wired end-to-end into SigNoz so you can *see inside every autonomous decision it makes*. Then it closes the loop: a **SRE-copilot agent queries CasperAgent's own SigNoz telemetry over MCP**, provisions its own alerts, and watches its own health — an agent observing itself.
 
 ![The Casper meeting notebook — synced player, karaoke transcript, talk-time balance, interruption counts, and tension-flagged moments, side by side with the chat assistant.](.github/assets/meeting-notebook.png)
 
 - 🌐 **Live app:** https://casper.careglyph.com
+- 📊 **Observability guide (start here for judging):** [`SIGNOZ.md`](SIGNOZ.md)
 - 💻 **Repo:** https://github.com/Michsantozz/karaforcasper
 
 ---
 
-## ✨ What it does
+## 🔭 Best Use of SigNoz — the pitch
+
+**One real agent. Every signal. A self-observing loop.** CasperAgent is instrumented **OpenTelemetry-native** — no proprietary SDK, the app just speaks standard OTLP (`http/protobuf`) and SigNoz is the sink. Everything below is **versioned as code** in [`deploy/signoz/`](deploy/signoz/) and reproducible.
+
+**① Full E2E agent traces.** One trace per turn stitches the whole waterfall — `agent_run → model_generation → tool_call / retrieve → eval` — across Mastra's native spans *and* our own. Mastra's OTLP path silently drops parent spans and streaming token usage (two upstream gaps, diagnosed against the running stack); [`src/mastra/llm-telemetry.ts`](src/mastra/llm-telemetry.ts) forges the OTel parent context off Mastra's live `AISpan` so our self-instrumented LLM/tool/RAG/quality spans join the *same* trace instead of standing up detached roots. Click a slow or errored turn → see the model call, the tools, the retrieval, and the answer-quality score, all in one view.
+
+**② Real `gen_ai.*` semconv — not estimates.** Every LLM span carries the OpenTelemetry GenAI conventions with the **real** provider usage: `gen_ai.request.model`, `gen_ai.usage.input_tokens` / `output_tokens`, `cache_read` / `cache_creation` tokens, `gen_ai.usage.cost` (computed from configured per-MTok prices, cache classes priced at their own rates), `gen_ai.server.ttft` (time-to-first-token, streaming), and `finish_reasons` as a real array (not a stringified `[object Object]`). Errors on both the generate **and** streaming paths emit an error span — including in-band SDK error parts that would otherwise mask as success.
+
+**③ First-class metrics, cardinality-disciplined.** The same numbers mirror to OTLP metrics — token counters, cost, and an operation-**duration histogram with custom bucket boundaries** tuned for real LLM latency (0.5–60s), because the SDK's default buckets (≤10s) collapse every LLM call into the first two. Labels are a **closed low-cardinality set** (model / provider / token-type / bounded `error.type`) — no `user_id`, `meeting_id`, or prompt text ever touches a metric label. That series-explosion trap, avoided by construction.
+
+**④ All three signals, correlated — logs deep-link to traces.** The failure logs aren't a separate stream you grep: each ERROR log record the app emits is **stamped with the failing span's `traceId`+`spanId`** ([`emitErrorLog`](src/mastra/llm-telemetry.ts)), so in SigNoz you click a log line and land on the exact failing LLM/tool/RAG span in the trace waterfall — *click a log, get its trace*. That's the "correlate signals across your stack" goal, built in, not bolted on.
+
+**⑤ Dashboards, alerts & a trace funnel — versioned.** A **21-panel** agent/LLM dashboard ([`deploy/signoz/dashboards/`](deploy/signoz/dashboards/)) spanning **traces, metrics *and* logs** panels, **8 alert rules** ([`deploy/signoz/alerts/`](deploy/signoz/alerts/)) — trace-based, metric-based, *and* logs-based, with trace/metric twins for cost/latency so an alert still fires if the metrics pipeline drops — and a **trace funnel** ([`deploy/signoz/funnels/`](deploy/signoz/funnels/)) modeling the real product agent's `plan → tool → generate` conversion/drop-off. Reproduced end-to-end via a SigNoz **Foundry casting spec** ([`deploy/signoz/casting.yaml`](deploy/signoz/casting.yaml) + `.lock`).
+
+**⑥ The self-observation loop — the SRE Sidekick.** A dedicated **SRE-copilot agent** ([`src/mastra/agents/sre.agent.ts`](src/mastra/agents/sre.agent.ts)) answers *"how many tokens did I spend today by model?"*, *"which tool is failing the most?"*, *"did any LLM call error in the last hour?"* by querying **CasperAgent's own SigNoz telemetry over the SigNoz MCP** — and its MCP toolset is itself wrapped in telemetry, so the copilot's own reads show up in the traces. On top: an **autonomous health-watch** runs every 15 min and a **weekly reliability report** — both emit their own spans, and the health-watch is *authorized to self-provision a SigNoz alert* when it spots a regression. **The agent observes itself, reasons over what it sees, and acts on it.**
+
+**⑦ Observability ChatOps in Slack.** The same SRE-copilot is a **Slackbot** ([`src/mastra/channels-slack.ts`](src/mastra/channels-slack.ts)): mention or DM it — *`@casper why did latency spike?`* — and the message routes through Mastra's native channel pipeline into the copilot, which investigates over the SigNoz MCP and **streams the answer back into the thread** (live typing, tool calls shown inline). One brain, three surfaces — product chat, the 15-min cron, and Slack — never a second implementation. Safe no-op when `SLACK_BOT_TOKEN` is absent (no adapter, no route).
+
+**→ Setup, import commands, and live verification: [`SIGNOZ.md`](SIGNOZ.md).**
+
+---
+
+## ✨ The real system under observation
+
+Instrumentation is only as convincing as the system it observes — so Casper is a **genuinely useful, live product**, not a stub emitting fake spans. Every feature below is a real source of the agent runs, LLM calls, and tools you see in SigNoz.
 
 **Meetings, end to end**
 - **Schedule from chat** — "book a meeting Thursday 2pm" creates the Google Calendar event, the Meet link, and the recording bot in one shot (free-slot picker included).
@@ -47,6 +72,7 @@ Just ask: *"how did the team interact?"*, *"is anyone going quiet?"*, *"was ther
 
 ## 🚀 Why it stands out
 
+- **Observable by construction, self-observing by design.** The whole agent stack is OTel-native and the SRE-copilot debugs it *with the same telemetry it emits* (over the SigNoz MCP) — the loop the "Agents of SigNoz" mission asks for: an agent you can actually see inside, that can see inside itself.
 - **Behavior, not just content.** Others summarize *what* was said. Casper reads *how the team worked* — the layer Gong sells to sales teams, brought to everyday internal meetings.
 - **Not one prompt — a supervised agent network.** A Casper supervisor routes per-meeting questions to a **Minutes** specialist and cross-meeting history/trends questions to a **Search** specialist, each with its own scoped toolset.
 - **Remembers you.** A durable per-user profile (timezone, default duration, recording prefs) persists across every conversation, plus **semantic recall** over past chats (Fireworks embeddings → pgvector) — not a rolling last-N window.
@@ -61,6 +87,7 @@ Just ask: *"how did the team interact?"*, *"is anyone going quiet?"*, *"was ther
 | Layer | Technology |
 |---|---|
 | App | Next.js 16, React 19 (App Router + RSC) |
+| **Observability** | **OpenTelemetry-native → SigNoz** (traces · metrics · logs · dashboards · alerts · trace funnel · MCP) |
 | Agent | Mastra (agents, tools, workflows) |
 | LLM | **Fireworks AI** (default — chat, **vision**, embeddings, insight; on AMD) · AWS Bedrock fallback |
 | Team dynamics | Deterministic timestamp analysis + Fireworks insight + browser audio (WebCodecs) |
@@ -133,31 +160,23 @@ Unit tests are hermetic (external services mocked). Live/E2E flows are opt-in (`
 
 ---
 
-## 📊 Observability (SigNoz)
+## 📊 Observability internals (SigNoz)
 
-CasperAgent is instrumented **OpenTelemetry-native** — every agent run, tool
-call, LLM generation, RAG hop, and Inngest workflow emits a span, exported over
-OTLP (`http/protobuf`) to **SigNoz**. No proprietary SDK: the app speaks
-standard OTel; SigNoz is just an OTLP sink (it runs alongside Langfuse + PG).
+The pitch is up top; this is where the signals live and how they're wired.
 
-- **Agent & LLM tracing** — spans carry the `gen_ai.*` semantic conventions
-  (`gen_ai.request.model`, `gen_ai.usage.input_tokens/output_tokens`, cache
-  reads) plus a `mastra.span.type` discriminator, so token usage, latency, and
-  cost are queryable per model and per tool.
-- **Self-instrumented token telemetry** — the Mastra→OTLP path drops token
-  usage on the streaming path (two upstream gaps, diagnosed against the running
-  stack); `src/mastra/llm-telemetry.ts` wraps every model with a dedicated OTel
-  tracer that emits real (not estimated) `gen_ai.usage.*` + latency spans.
-- **Versioned dashboard + alerts** — a 19-panel agent/LLM dashboard
-  ([`deploy/signoz/dashboards/`](deploy/signoz/dashboards/)) and 7 alert rules
-  ([`deploy/signoz/alerts/`](deploy/signoz/alerts/)) ship as code, covering
-  every span type the app emits: LLM generations, tool calls, the RAG retrieval
-  hop, answer quality, and the autonomous health-watch itself.
-- **Reproducible deploy** — a SigNoz Foundry casting spec
-  ([`deploy/signoz/casting.yaml`](deploy/signoz/casting.yaml) + `.lock`) so the
-  exact SigNoz stack (server + MCP) can be re-created with one command.
+| What | Where |
+|---|---|
+| Self-instrumented LLM/tool/RAG/quality spans + `gen_ai.*` metrics + correlated error logs | [`src/mastra/llm-telemetry.ts`](src/mastra/llm-telemetry.ts), [`src/mastra/agent-quality.ts`](src/mastra/agent-quality.ts) |
+| SRE-copilot (queries own telemetry over SigNoz MCP, self-provisions alerts) | [`src/mastra/agents/sre.agent.ts`](src/mastra/agents/sre.agent.ts), [`src/mastra/mcp-signoz.ts`](src/mastra/mcp-signoz.ts) |
+| Autonomous health-watch + weekly reliability report (own spans) | [`src/server/observability/`](src/server/observability/) |
+| 21-panel agent/LLM dashboard (traces · metrics · logs) | [`deploy/signoz/dashboards/`](deploy/signoz/dashboards/) |
+| 8 alert rules (trace + metric twins, logs-based, health-watch watchdog) | [`deploy/signoz/alerts/`](deploy/signoz/alerts/) |
+| `plan → tool → generate` trace funnel | [`deploy/signoz/funnels/`](deploy/signoz/funnels/) |
+| Reproducible SigNoz stack (server + MCP) | [`deploy/signoz/casting.yaml`](deploy/signoz/casting.yaml) |
 
-**→ Full observability guide, setup, and verification: [`SIGNOZ.md`](SIGNOZ.md).**
+**Signal coverage:** the app emits **traces, metrics, and logs** over OTLP (no proprietary SDK; SigNoz runs alongside Langfuse + PG). The versioned dashboard/alert/funnel pack drives deep on **all three** — trace, metric *and* logs panels, with logs-based alerting. The logs aren't just exported: each error log **carries the failing span's `traceId`+`spanId`**, so it deep-links to its trace in the waterfall — signals correlated, not siloed.
+
+**→ Full guide, import commands, and live verification: [`SIGNOZ.md`](SIGNOZ.md).**
 
 ---
 

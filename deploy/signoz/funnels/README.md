@@ -8,8 +8,16 @@ only makes sense for an agent, not a plain web request.
 
 ```
 invoke_agent  →  tool_call  →  generate
- (agent_run)    (mcp_tool_call)  (model_inference)
+ (agent_run)     (tool_call)    (model_inference)
 ```
+
+It targets **Casper Assistant** — the product agent real users talk to (schedule
+bots, list calendar, create meetings) — NOT the internal SRE-copilot. The span
+names embed the agent's name (`invoke_agent Casper Assistant`,
+`model_inference Casper Assistant`), so a funnel measures ONE agent; this is the
+one that matters for the product. (An earlier version pinned to the SRE copilot,
+which no real user traffic hits — the funnel read as the general pipeline but
+measured only self-observability. Fixed.)
 
 These are Mastra's **native** trace spans (all on service `casper-assistant`,
 parented under the same `agent_run` trace), so no extra instrumentation is
@@ -44,11 +52,18 @@ Then open **Traces → Funnels** in the SigNoz UI, or query
 
 - **Step match is by exact `span_name`**, not by attribute. SigNoz's funnel query
   matches `service_name = X AND name = <span_name>`; the per-step `filters` are a
-  secondary refinement, not the primary match. Mastra's tool spans are named
-  `execute_tool <tool>`, so step 2 here is pinned to one representative tool
-  (`signoz_signoz_aggregate_traces`). A truly tool-agnostic step 2 would need a
-  stable per-phase span name (e.g. emitting an `agent.tool_phase` span) — a small
-  instrumentation add, noted as future work.
+  secondary refinement, not the primary match. Mastra's local tool spans are named
+  `execute_tool <toolId>`, so step 2 is pinned to one representative tool on the
+  assistant's common path (`list_calendar_events`). A truly tool-agnostic step 2
+  would need a stable per-phase span name (e.g. emitting an `agent.tool_phase`
+  span) — a small instrumentation add, noted as future work. Note `mastra.span.type`
+  is `tool_call` for the assistant's local tools (it was `mcp_tool_call` in the
+  old SRE-copilot version, whose tools were all MCP).
+- **Confirm the exact `span_name` against a live trace before importing.** The
+  names above are derived from `@mastra/otel-exporter`'s naming
+  (`<operation> <entityName>`), but the surest check is to open one Casper
+  Assistant trace in **Traces**, read the real span names off the waterfall, and
+  paste them in. A one-character mismatch = the step silently never matches.
 - On **self-host OSS**, the `analytics/overview` endpoint currently returns a
   serialization error (`unsupported value: NaN`) when conversion is a clean
   100% (no drop-off in the sample window) — a SigNoz OSS bug, not a funnel-spec

@@ -14,7 +14,7 @@
   "spec": {
     "display": {
       "name": "CasperAgent — Agent & LLM Observability",
-      "description": "Agent-native observability for CasperAgent (Mastra + Fireworks) over OTLP traces. Built on the gen_ai.* semantic conventions the Mastra OtelExporter emits: gen_ai.request.model, gen_ai.usage.input_tokens/output_tokens, plus mastra.span.type. LLM panels filter on mastra.span.type = 'model_generation' (the exact discriminator our spans carry). COST is derived by formula (tokens x price) because the exporter does not emit a cost attribute — see the PRICE PLACEHOLDER note on the cost panels."
+      "description": "Agent-native observability for CasperAgent (Mastra + Fireworks) across all THREE OTLP signals — traces, metrics, AND logs. Traces panels filter on mastra.span.type (model_generation / tool_call / retrieval / eval / health_watch) over the gen_ai.* semantic conventions. Metrics panels read the first-class OTel counters/histogram the app exports (gen_ai.client.*). Logs panels (bottom row) read the correlated ERROR log records the app emits at each failure — each stamped with the failing span's traceId+spanId, so a log line deep-links to its trace. COST on the trace panels is derived by formula (tokens x price) because the exporter emits no cost attribute — see the PRICE PLACEHOLDER note; the metric cost panel uses the real emitted USD counter."
     },
     "variables": [],
     "panels": {
@@ -1202,6 +1202,124 @@
             }
           ]
         }
+      },
+      "eeeeeeee-0000-0000-0000-00000000L001": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Error logs over time by operation",
+            "description": "The LOGS signal (fifth pillar): correlated ERROR log records the app emits at each failure, count over time grouped by gen_ai.operation.name (chat / execute_tool / retrieve). Every one of these logs carries the failing span's traceId+spanId, so in the Logs explorer you click a line and jump straight to the trace — cross-signal correlation, not just 'logs also exist'. Filter gen_ai.operation.name EXISTS isolates our correlated logs from Mastra's internal log noise."
+          },
+          "plugin": {
+            "kind": "signoz/TimeSeriesPanel",
+            "spec": {
+              "visualization": {
+                "timePreference": "global_time"
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "time_series",
+              "spec": {
+                "plugin": {
+                  "kind": "signoz/CompositeQuery",
+                  "spec": {
+                    "queries": [
+                      {
+                        "type": "builder_query",
+                        "spec": {
+                          "name": "A",
+                          "signal": "logs",
+                          "stepInterval": 60,
+                          "disabled": false,
+                          "filter": {
+                            "expression": "gen_ai.operation.name EXISTS"
+                          },
+                          "groupBy": [
+                            {
+                              "name": "gen_ai.operation.name",
+                              "fieldDataType": "string",
+                              "fieldContext": "attribute"
+                            }
+                          ],
+                          "legend": "{{gen_ai.operation.name}}",
+                          "having": {
+                            "expression": ""
+                          },
+                          "aggregations": [
+                            {
+                              "expression": "count()"
+                            }
+                          ]
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "eeeeeeee-0000-0000-0000-00000000L002": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Error logs by type",
+            "description": "Same correlated ERROR log records, grouped by error.type (bounded label set). Complements the trace 'Errors by type' panel with a first-class LOG view of the same failures — each log line deep-links to its span. This is the panel that makes the Logs signal a first-class citizen of the dashboard instead of an empty tab."
+          },
+          "plugin": {
+            "kind": "signoz/TablePanel",
+            "spec": {
+              "visualization": {
+                "timePreference": "global_time"
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "scalar",
+              "spec": {
+                "plugin": {
+                  "kind": "signoz/CompositeQuery",
+                  "spec": {
+                    "queries": [
+                      {
+                        "type": "builder_query",
+                        "spec": {
+                          "name": "A",
+                          "signal": "logs",
+                          "stepInterval": 60,
+                          "disabled": false,
+                          "filter": {
+                            "expression": "gen_ai.operation.name EXISTS"
+                          },
+                          "groupBy": [
+                            {
+                              "name": "error.type",
+                              "fieldDataType": "string",
+                              "fieldContext": "attribute"
+                            }
+                          ],
+                          "legend": "{{error.type}}",
+                          "having": {
+                            "expression": ""
+                          },
+                          "aggregations": [
+                            {
+                              "expression": "count()"
+                            }
+                          ]
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        }
       }
     },
     "layouts": [
@@ -1378,6 +1496,24 @@
               "height": 3,
               "content": {
                 "$ref": "#/spec/panels/dddddddd-0000-0000-0000-00000000h001"
+              }
+            },
+            {
+              "x": 0,
+              "y": 34,
+              "width": 8,
+              "height": 5,
+              "content": {
+                "$ref": "#/spec/panels/eeeeeeee-0000-0000-0000-00000000L001"
+              }
+            },
+            {
+              "x": 8,
+              "y": 34,
+              "width": 4,
+              "height": 5,
+              "content": {
+                "$ref": "#/spec/panels/eeeeeeee-0000-0000-0000-00000000L002"
               }
             }
           ]

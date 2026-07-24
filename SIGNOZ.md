@@ -1,12 +1,21 @@
 # SigNoz Observability
 
 OpenTelemetry-native observability for the CasperAgent agent stack (Mastra +
-Vercel AI SDK + Claude Agent SDK). Agent spans — tool calls, LLM generations,
-RAG hops, Inngest workflows — plus Mastra log events are exported over OTLP
-(`http/protobuf`) to a SigNoz instance. Token/cost/latency ride along as span
-attributes (`gen_ai.usage.*`, span durations); Mastra's auto-extracted *metrics*
-are NOT sent over OTLP (the OtelExporter forwards only traces + logs), so
-cost/latency dashboards in SigNoz are built from traces, not a metrics pipeline.
+Vercel AI SDK + Claude Agent SDK), across all **three OTLP signals — traces,
+metrics, and logs**. Agent spans — tool calls, LLM generations, RAG hops, Inngest
+workflows — export over OTLP (`http/protobuf`) to a SigNoz instance, with
+token/cost/latency riding along as `gen_ai.*` span attributes.
+
+Two signals are **self-instrumented** in `src/mastra/llm-telemetry.ts`, because
+Mastra's own `OtelExporter` forwards only traces + its internal log events (no
+`onMetricEvent`, sparse logs). That module stands up its own OTLP MeterProvider
+and LoggerProvider (twins of the tracer) so the same numbers ALSO land as:
+- first-class **metrics** (`gen_ai.client.token.usage/operation.cost/duration`) —
+  a real time-series store for PromQL/metric alerts, not just span attributes;
+- correlated ERROR **logs** — one log record per failure, stamped with the failing
+  span's `traceId`+`spanId`, so a log line in SigNoz deep-links to the exact span
+  in the trace waterfall. This is the cross-signal correlation the "correlate
+  signals across your stack" goal is about — click a log, land on its trace.
 
 SigNoz has **no proprietary SDK**: the app speaks standard OTel, SigNoz just
 receives it via OTLP. Same spans already feed Langfuse and PG; SigNoz is an
@@ -115,6 +124,28 @@ per-span cost processor (`signozllmpricing`, `_signoz.gen_ai.total_cost`) is
 **EE/Cloud-only** — it is not in the OSS collector image, so on self-host OSS the
 app-side computation above is the way to get real cost.
 
+## Correlated logs — the fifth signal, deep-linked to traces
+
+The app emits a first-class OTLP ERROR **log record** at each failure it already
+traces — a failed LLM call, a failed tool execution, a failed retrieval hop —
+from the same point it emits the error span (`emitErrorLog` in
+`src/mastra/llm-telemetry.ts`). Each record carries:
+
+- `severityNumber = ERROR`, a human `body` (`"LLM call failed: <model> (<type>)"`),
+- `gen_ai.operation.name` (`chat` / `execute_tool` / `retrieve`), a **bounded**
+  `error.type` label, and `exception.type` / `exception.message`,
+- and — the point — the failing span's **exact trace context**: the log's
+  `traceId`+`spanId` equal the error span's, via `LogRecord.context`. In SigNoz's
+  Logs explorer you click the line and jump to that span in the waterfall.
+
+This lights up two dashboard panels (`Error logs over time by operation`, `Error
+logs by type`, bottom row of `agent-llm-observability.json`) and a logs-based
+alert (`deploy/signoz/alerts/llm-error-logs.json`) — the logs signal is a
+first-class citizen of the dashboard, not an empty tab. Filter
+`gen_ai.operation.name EXISTS` isolates these correlated records from Mastra's
+internal log noise. No-op when SigNoz is off; a logging failure never escapes onto
+the request path.
+
 ## SRE-copilot — the agent queries its own telemetry
 
 The app ships an `sreAgent` (registered in `src/mastra/index.ts`, delegated to by
@@ -154,7 +185,10 @@ pnpm dev            # app :3001, now exporting to SigNoz
 open http://localhost:8090   # Traces → service `casper-assistant`
 ```
 
-Service name is `casper-assistant` (set in `observability.ts`).
+Service name is `casper-assistant` (set in `observability.ts`). To see the logs
+signal + correlation: trigger a failure (e.g. an invalid model or a tool error),
+then in **Logs** filter `gen_ai.operation.name EXISTS` — each row shows a
+`traceId`/`spanId`; click through to land on the exact failing span in **Traces**.
 
 ## Reference
 

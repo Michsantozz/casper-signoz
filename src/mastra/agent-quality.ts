@@ -2,7 +2,11 @@ import "server-only";
 
 import { SpanKind } from "@opentelemetry/api";
 import { createCompletenessScorer } from "@mastra/evals/scorers/prebuilt";
-import { getSignozTracer } from "@/mastra/llm-telemetry";
+import {
+  getSignozTracer,
+  currentTurnLink,
+  parentContextFromLink,
+} from "@/mastra/llm-telemetry";
 
 /**
  * Agent RESPONSE-QUALITY telemetry — the third observability axis.
@@ -37,10 +41,22 @@ function emitEvalSpan(args: {
   const tracer = getSignozTracer();
   if (!tracer) return;
 
-  const span = tracer.startSpan(`eval ${args.scorer}`, {
-    kind: SpanKind.INTERNAL,
-    startTime: new Date(Date.now() - args.durationMs),
-  });
+  // Join the turn's trace so the score lands IN the same waterfall as the LLM /
+  // tool spans it evaluates — click a slow/errored turn, see its quality score
+  // right there. The ref was captured while the agent was live (this runs in
+  // after(), when Mastra's own span context is already gone). No ref → detached
+  // root, same as before.
+  const link = currentTurnLink();
+  const parentCtx = link ? parentContextFromLink(link) : undefined;
+
+  const span = tracer.startSpan(
+    `eval ${args.scorer}`,
+    {
+      kind: SpanKind.INTERNAL,
+      startTime: new Date(Date.now() - args.durationMs),
+    },
+    parentCtx,
+  );
   span.setAttribute("mastra.span.type", "eval");
   span.setAttribute("mastra.eval.scorer", args.scorer);
   // 0..1 quality score. One stable attribute name so the dashboard aggregates
