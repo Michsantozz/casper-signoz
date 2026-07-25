@@ -159,6 +159,16 @@ service-account key (`SIGNOZ-API-KEY` header). **One command applies all of it:*
      so an editor key applies the whole pack. Actually *changing* the channel
      still needs an admin key, and the error says so.
 
+   **Renaming a rule leaves the old one behind.** Identity is the rule's `alert`
+   name, so renaming one in the versioned JSON makes the import *create* the new
+   name and leave the previous rule in place — two rules measuring the same thing,
+   both notifying the same channel, and only one of them under version control.
+   Import does not prune (it must not: the SRE agent auto-provisions rules of its
+   own, and a blind prune would delete those). After a rename, delete the old rule
+   by hand: `GET /api/v2/rules` → find the stale `alert` name →
+   `DELETE /api/v2/rules/{id}`. This happened once, with `answer quality low`
+   surviving its rename to `answer coverage low`.
+
 The endpoints it drives, if you'd rather do it by hand: `POST /api/v1/channels`,
 `POST /api/v2/dashboards` (body `{ schemaVersion, name (RFC-1123 slug),
 tags:[{key,value}], spec }` — the JSON's `spec` is used as-is), and
