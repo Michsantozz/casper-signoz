@@ -1,0 +1,20 @@
+{
+  "name": "casper-default",
+  "webhook_configs": [
+    {
+      "send_resolved": true,
+      "url": "http://localhost:9099/webhook",
+      "url_file": "",
+      "max_alerts": 0,
+      "timeout": 0,
+      "http_config": {
+        "tls_config": {
+          "insecure_skip_verify": false
+        },
+        "follow_redirects": true,
+        "enable_http2": true,
+        "proxy_url": ""
+      }
+    }
+  ]
+}

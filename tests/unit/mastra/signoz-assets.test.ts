@@ -65,4 +65,52 @@ describe("versioned SigNoz assets", () => {
       }
     }
   });
+
+  it("versions every notification channel the alert rules route to", () => {
+    // SigNoz resolves `channels` by NAME and never creates the channel, so a
+    // rule naming one that no versioned file defines imports fine and then has
+    // nowhere to deliver — silently, since a rule that never fires and a rule
+    // that fires into nothing look identical. That gap shipped once: the nine
+    // rules all named `casper-default` while nothing under deploy/ created it
+    // and the alerts README claimed no channel was set at all.
+    const alertsDir = join(process.cwd(), "deploy/signoz/alerts");
+    const channelsDir = join(process.cwd(), "deploy/signoz/channels");
+
+    const defined = new Set(
+      readdirSync(channelsDir)
+        .filter((name) => name.endsWith(".json"))
+        .map(
+          (name) => (readJson(join(channelsDir, name)) as { name?: string }).name,
+        ),
+    );
+    expect(defined.size).toBeGreaterThan(0);
+
+    const referenced = new Map<string, string>();
+    for (const file of readdirSync(alertsDir).filter((name) =>
+      name.endsWith(".json"),
+    )) {
+      const rule = readJson(join(alertsDir, file)) as {
+        condition?: {
+          thresholds?: { spec?: Array<{ channels?: string[] }> };
+        };
+      };
+      const thresholds = rule.condition?.thresholds?.spec ?? [];
+      // Every rule must route somewhere: `usePolicy: false` plus an empty
+      // `channels` is a rule that evaluates and notifies nobody.
+      expect(thresholds.length, file).toBeGreaterThan(0);
+      for (const threshold of thresholds) {
+        expect(threshold.channels?.length, file).toBeGreaterThan(0);
+        for (const channel of threshold.channels ?? []) {
+          referenced.set(channel, file);
+        }
+      }
+    }
+
+    for (const [channel, file] of referenced) {
+      expect(
+        defined.has(channel),
+        `${file} routes to "${channel}", which no file in deploy/signoz/channels defines`,
+      ).toBe(true);
+    }
+  });
 });

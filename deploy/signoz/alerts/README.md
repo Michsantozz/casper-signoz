@@ -48,11 +48,17 @@ signal, since the span is only emitted on failure.
 
 ## Notify channel
 
-`notificationSettings.usePolicy: false` means these rules use their thresholds'
-`channels` (none set here) / the default routing. To route to Slack/webhook/
-email/PagerDuty/Opsgenie/Teams, create the channel in SigNoz
-(Settings → Alert Channels), then either set `usePolicy: true` (route policies)
-or add the channel name to each threshold's `channels` array.
+`notificationSettings.usePolicy: false` means these rules route via their own
+thresholds' `channels` rather than route policies. **All nine rules set
+`channels: ["casper-default"]`** (`condition.thresholds.spec[0].channels`).
+
+SigNoz resolves that by NAME and does not create the channel, so importing
+these rules into a fresh instance yields nine rules pointing at nothing. Create
+it first — the definition is versioned at [`../channels/casper-default.json`](../channels/README.md),
+which also covers the admin-only permission on that route.
+
+To route somewhere else, either change the name in each threshold's `channels`
+array, or set `usePolicy: true` and manage the routing with route policies.
 
 ## Cost alert pricing
 
