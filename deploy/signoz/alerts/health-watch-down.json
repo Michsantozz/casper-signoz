@@ -15,7 +15,7 @@
             "stepInterval": 60,
             "disabled": false,
             "filter": {
-              "expression": "mastra.span.type = 'health_watch' AND mastra.health_watch.ok = false"
+              "expression": "service.name = 'casper-assistant' AND deployment.environment.name = 'production' AND mastra.span.type = 'health_watch' AND mastra.health_watch.ok = false"
             },
             "groupBy": [
               {

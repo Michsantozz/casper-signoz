@@ -5,7 +5,15 @@ OTLP traces the app already exports (see [`../../../SIGNOZ.md`](../../../SIGNOZ.
 
 ## `agent-llm-observability.json`
 
-Agent-native observability over `signal: traces`. Panels:
+Agent-native observability across **traces, metrics and logs** — 29 panels.
+
+> **One control before anything else: the `Environment` variable** at the top of
+> the dashboard. Every traces panel is scoped to
+> `deployment.environment.name = $environment` (default `production`). Set it to
+> your `DEPLOYMENT_ENVIRONMENT` — `development` if you're running `pnpm dev` —
+> or the panels are correct and empty. See [below](#the-environment-variable).
+
+Panels:
 
 | Panel | Query |
 |-------|-------|
@@ -28,6 +36,52 @@ Agent-native observability over `signal: traces`. Panels:
 | RAG top similarity score | `avg(gen_ai.retrieval.top_score)` grouped by collection |
 | Empty retrievals | `count()` where `gen_ai.retrieval.returned_count = 0` |
 | Health-watch failures | `count()` where `mastra.span.type = 'health_watch'` |
+| **Model failovers** | `count()` where `mastra.span.type = 'model_failover'` |
+| **Failovers by target & trigger** | `count()` grouped by `model.failover.to` + `model.failover.source` |
+| **Error logs over time by operation** | `count()` of ERROR log records grouped by `gen_ai.operation.name` — `signal: logs` |
+| **Error logs by type** | `count()` grouped by `error.type` — `signal: logs` |
+| Pipeline: runs / reached tool / reached generation | `count_distinct(trace_id)` per stage, matched on `gen_ai.operation.name` |
+| Tool conversion % · Generation conversion % | formula `(B/A)*100` over the stage counts |
+| Pipeline drop-off over time | the three stage counts as a time series |
+
+### The `Environment` variable
+
+Every traces panel carries two scoping filters: `casper.self_instrumented = true`
+(de-duplication — see below) and `deployment.environment.name = $environment`.
+
+That second one is a **dashboard variable** (`TextVariable`, default
+`production`), not a hardcoded value, for one reason: the app stamps
+`deployment.environment.name` from `DEPLOYMENT_ENVIRONMENT ?? VERCEL_ENV ??
+NODE_ENV` ([`llm-telemetry.ts`](../../../src/mastra/llm-telemetry.ts)), so a
+`pnpm dev` run emits `development` and a dashboard pinned to `production` would
+render every panel at zero — correct, and indistinguishable from "the
+instrumentation is broken". Change the value in the box at the top of the
+dashboard instead of editing this JSON.
+
+Why scope by environment at all: verification scripts and health probes emit
+spans under their own environments (`e2e-verify`, `smoke`, `fr-probe`,
+`hw-probe`) with fabricated model and tool names (`e2e1784862343489`,
+`casper-probe-*`). Unscoped, they read as real models in a spend-by-model
+breakdown and their deliberate failures inflate the tool-failure panels.
+
+Two deliberate exclusions:
+
+- **The pipeline-conversion row is not scoped by it.** Its first stage counts
+  Mastra's *native* `invoke_agent` spans, which come from a different OTel
+  resource and carry no `deployment.environment.name` at all. Scoping the later
+  stages while the denominator stays unscoped shrinks the numerator against a
+  full denominator and reports a fake drop-off. All three stages instead share
+  `casper.in_agent_run = true`, which already keeps probe and workflow traffic
+  out — that marker exists for exactly this reason.
+- **The logs panels are not scoped by it.** The exported log records don't carry
+  the attribute in a filterable form (verified against SigNoz v0.134: the same
+  filter returns 0 rows on `signal: logs` while returning 94 on `signal:
+  traces`). They're scoped by `gen_ai.operation.name EXISTS` instead, which
+  isolates our correlated error logs from Mastra's internal log noise.
+
+Alert rules keep the literal `'production'`: a rule evaluates on a schedule with
+no dashboard open, so there is no variable to interpolate. Edit the value in
+[`../alerts/*.json`](../alerts/) if you page on a different environment.
 
 ### The retrieval + health-watch panels
 
@@ -42,6 +96,20 @@ of the model call: when it slows down the whole turn slows down, and when
 worse context — a leading indicator of the quality regression that
 `answer-quality-low` only catches after the fact. `Health-watch failures` is the
 watchdog's own vital sign (paired with `../alerts/health-watch-down.json`).
+
+### The failover panels — SigNoz as a runtime input
+
+The last two panels (`Model failovers`, `Failovers by target & trigger`) read
+`mastra.span.type = 'model_failover'` — a span the app emits when it reroutes off
+a degraded primary provider to its fallback, *on its own*, based on health it
+reads back out of SigNoz. This is the axis the rest of the dashboard doesn't
+cover: not "what did the agent do" but "what did the agent do BECAUSE of what it
+saw about itself". `model.failover.source` records which signal tripped it —
+`local` (this pod's recent error burst), `signoz` (a fleet-wide error-rate/p95
+regression queried back from SigNoz), or `forced` (the demo override). 0 in a
+healthy window; nonzero means the primary crossed threshold and the system
+protected the turn. Paired with `../alerts/model-failover.json`. Mechanism:
+`src/mastra/model-health.ts` + `src/mastra/model.ts`.
 
 ### The metric-native panels (fifth SigNoz signal)
 

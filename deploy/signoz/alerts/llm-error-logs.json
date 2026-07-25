@@ -15,7 +15,7 @@
             "stepInterval": 60,
             "disabled": false,
             "filter": {
-              "expression": "gen_ai.operation.name EXISTS"
+              "expression": "service.name = 'casper-assistant' AND deployment.environment.name = 'production' AND gen_ai.operation.name EXISTS"
             },
             "groupBy": [
               {

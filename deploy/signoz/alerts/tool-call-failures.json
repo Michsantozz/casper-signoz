@@ -15,7 +15,7 @@
             "stepInterval": 60,
             "disabled": false,
             "filter": {
-              "expression": "mastra.span.type = 'tool_call' AND casper.self_instrumented = true AND error.type EXISTS"
+              "expression": "service.name = 'casper-assistant' AND deployment.environment.name = 'production' AND mastra.span.type = 'tool_call' AND casper.self_instrumented = true AND error.type EXISTS"
             },
             "groupBy": [
               {

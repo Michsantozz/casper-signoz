@@ -15,7 +15,7 @@
             "stepInterval": 60,
             "disabled": false,
             "filter": {
-              "expression": "mastra.span.type = 'model_generation' AND casper.self_instrumented = true"
+              "expression": "service.name = 'casper-assistant' AND deployment.environment.name = 'production' AND mastra.span.type = 'model_generation' AND casper.self_instrumented = true"
             },
             "having": {
               "expression": ""

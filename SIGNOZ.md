@@ -106,6 +106,17 @@ service-account key (`SIGNOZ-API-KEY` header).
 
 Panels populate once `gen_ai.*` traces are ingested (drive the agent first).
 
+### Set the `Environment` variable first
+
+The dashboard opens with an **`Environment`** box at the top (a `TextVariable`,
+default `production`). Every traces panel is scoped to
+`deployment.environment.name = $environment`, and the app stamps that attribute
+from `DEPLOYMENT_ENVIRONMENT ?? VERCEL_ENV ?? NODE_ENV` — so a `pnpm dev` run
+emits `development` and a dashboard left on `production` renders **every panel at
+zero**. Either export `DEPLOYMENT_ENVIRONMENT=production` when you drive the app,
+or type your environment into the box. No JSON editing either way. Rationale and
+the two panels deliberately left unscoped: [`deploy/signoz/dashboards/README.md`](deploy/signoz/dashboards/README.md#the-environment-variable).
+
 ## Real LLM cost (not a placeholder)
 
 The dashboard cost panels read `gen_ai.usage.cost` — a real $ figure the app
@@ -117,6 +128,26 @@ tokens) so every model_generation span carries its cost:
 LLM_PRICE_INPUT_PER_MTOK=0.95
 LLM_PRICE_OUTPUT_PER_MTOK=4.00
 ```
+
+**Set a per-provider override whenever a fallback can serve traffic.** The pair
+above is GLOBAL — it applies to every call regardless of which provider answered
+it. That is wrong the moment the telemetry-driven failover below reroutes a turn
+from Fireworks to Bedrock: the Bedrock call would be priced at the Fireworks
+rate, so `gen_ai.usage.cost` isn't omitted, it's **emitted wrong** — precisely
+during the incident the cost panels and the cost-spike alert exist for. Suffix
+each price with the provider (`gen_ai.provider.name`, lowercased, non-alphanumerics
+collapsed to `_`); anything without an override keeps using the global pair:
+
+```bash
+# Claude Sonnet 4.5 on Bedrock, the failover target. "amazon-bedrock" → amazon_bedrock
+LLM_PRICE_INPUT_PER_MTOK__amazon_bedrock=3.00
+LLM_PRICE_OUTPUT_PER_MTOK__amazon_bedrock=15.00
+```
+
+Input and output must be set together per provider (enforced at boot by
+`env-schema.ts`, same as the global pair) — a lone override would price half the
+provider's tokens at another provider's rate. The cache prices follow the same
+rule and fall back to that provider's own input price.
 
 Absent → the cost field is simply empty (no fabricated number). See
 `src/mastra/llm-telemetry.ts` (`pricePerToken`). Note: SigNoz's own native
@@ -170,12 +201,123 @@ host port binding is irrelevant (remove it from the generated compose if `:8000`
 collides on the host). Files: `src/mastra/mcp-signoz.ts` (client),
 `src/mastra/agents/sre.agent.ts` (agent).
 
+## Autonomous alert provisioning — uniqueness enforced in code
+
+The health-watch cron (`*/15`) drives the internal `sreAutomationAgent`, which is
+authorized to **create** a SigNoz alert when it spots a real regression. Its MCP
+toolset is least-privilege: reads plus `create_alert`/`create_dashboard` only —
+update/delete/mute stay denied (`src/mastra/mcp-signoz.ts`).
+
+That asymmetry is the risk: a loop that can only ADD, running 96×/day, turns
+every duplicate into a permanent one. Relying on the prompt to prevent that
+("list existing rules and don't duplicate one") puts a **semantic** judgment —
+"does an existing rule cover this?" — in the hands of an LLM reasoning over names
+it generated itself on earlier ticks.
+
+So the split is explicit: **judgment stays in the agent, uniqueness lives in
+code.** `withAlertIdempotency` wraps the create-alert tool and, before any write:
+
+- derives a **canonical key** from the alert name (lowercased, punctuation
+  collapsed) so cosmetic rewording maps to one identity;
+- lists existing rules and turns a key collision into a **no-op** that reports
+  back `deduplicated: true` (the agent is told coverage already exists);
+- stamps survivors with the reserved `casper-auto/` prefix, so rules this loop
+  owns are recognizable to later ticks and to operators;
+- **fails closed** — if existing rules can't be listed, or the alert has no name,
+  nothing is created. Skipping a cycle is recoverable; an undeletable duplicate
+  is not.
+
+No LLM judgment participates in the uniqueness decision.
+
 ## Agent pipeline funnel
 
 A SigNoz **trace funnel** models an agent run as `invoke_agent → tool_call →
 generate` (Mastra's native trace spans) and measures conversion / drop-off per
 phase — observability that only makes sense for an agent. Versioned at
 [`deploy/signoz/funnels/`](deploy/signoz/funnels/) with its create/caveat notes.
+
+## Telemetry-driven failover — SigNoz as a runtime input
+
+Most of this doc is about *seeing* the agent. This part is about the agent
+*acting on what it sees*. `createModel()` (`src/mastra/model.ts`) consults
+`src/mastra/model-health.ts` before every turn; when the configured primary
+provider is degraded it **fails over to the fallback on its own** and records the
+decision as a `model_failover` span. SigNoz stops being a dashboard you read and
+becomes an input the system runs on — "if you can't observe your agent you don't
+own it", closed all the way to the agent changing its own behaviour.
+
+Two health signals, combined, **always fail-open** (a health check must never
+fail — or even slow — a real request):
+
+- **Local rolling window** (this process). The LLM telemetry middleware already
+  observes every call's success/error inline; each outcome is recorded into a
+  per-provider ring buffer (`noteLlmOutcome`). Zero network, always available —
+  the circuit breaker that actually protects the hot path. Trips on a real burst
+  of failures (kill the provider → real errors → trip).
+- **SigNoz query** (cross-replica). A background poll (≤ every 60s, off the hot
+  path) reads the provider's OWN `model_generation` error-rate + p95 back out of
+  SigNoz via `POST /api/v5/query_range`, filtered to
+  `casper.self_instrumented = true` (so it counts our cost-bearing spans, never
+  the duplicate exporter rows). This is the "reads its own telemetry" signal — a
+  verdict informed by the whole fleet, not just this pod. It speaks the **same
+  v2alpha1 builder dialect** as the versioned dashboards and alerts, so the
+  failover verdict and the panels an operator reads can't drift apart. Override
+  the path with `SIGNOZ_QUERY_PATH` if the API moves.
+
+`createModel()` only ever DOWNGRADES to a *configured* fallback (creds present),
+never fails a request; any error in the health path builds the primary unchanged.
+The switch emits a `model_failover` span (`model.failover.from/to/source/reason`),
+which lights up two dashboard panels (`Model failovers`, `Failovers by target &
+trigger`) and `deploy/signoz/alerts/model-failover.json`.
+
+Env (all optional; absent → feature is inert, primary always used):
+
+```bash
+# The SigNoz query signal needs a queryable instance + a service-account key
+# (reuses the SRE-copilot's vars):
+SIGNOZ_INSTANCE_URL=http://signoz-signoz-0:8080
+SIGNOZ_MCP_API_KEY=<signoz-service-account-key>
+
+# Tuning (defaults shown):
+MODEL_HEALTH_ERROR_RATE_THRESHOLD=0.5    # ≥50% errors in window → degraded
+MODEL_HEALTH_MIN_SAMPLES=4               # don't trip on 1–3 calls
+MODEL_HEALTH_P95_MS_THRESHOLD=30000      # ≥30s p95 → degraded (mirrors the alert)
+MODEL_HEALTH_WINDOW_MS=120000            # local window (2 min)
+MODEL_HEALTH_REFRESH_MS=60000            # SigNoz poll cadence
+MODEL_HEALTH_DISABLED=1                  # kill switch (always healthy)
+
+# Demo: force a deterministic failover on stage without breaking a provider.
+MODEL_HEALTH_FORCE_DEGRADED=fireworks    # or "1"/"true" for whatever is primary
+```
+
+### Verify the SigNoz signal against a live instance
+
+The `query_range` signal fails open by design, which means a rejected query shape
+and an idle window both look like "no verdict" — so a broken query would be
+silent, and the local breaker would quietly carry every decision. Verify it
+explicitly instead of assuming:
+
+```bash
+SIGNOZ_INSTANCE_URL=http://localhost:8090 \
+SIGNOZ_MCP_API_KEY=<service-account-key> \
+DEPLOYMENT_ENVIRONMENT=development \
+pnpm verify:signoz
+```
+
+It prints the exact request body, runs it for both providers, and exits non-zero
+if the query is **rejected** (HTTP 4xx → wrong shape) or the response is
+**unreadable** (200 but no parseable aggregate). "No traffic in the window" exits
+0 as INCONCLUSIVE — drive the agent, then re-run for an end-to-end pass. The
+same discriminator is available at runtime via `lastSignozProbe(provider)`.
+
+> **Demo, honest.** The local signal + `MODEL_HEALTH_FORCE_DEGRADED` make the
+> failover reproducible on stage: set the env, send a chat, watch the trace carry
+> a `model_failover` span and the answer come back on Bedrock. Note that
+> `MODEL_HEALTH_FORCE_DEGRADED` short-circuits the health check before either
+> signal runs — so run `pnpm verify:signoz` too if you want proof the
+> cross-replica SigNoz path itself works, not just the forced demo path. Needs a
+> configured fallback (`MODEL_PROVIDER=fireworks` primary + Bedrock creds, or
+> vice-versa) or there's nowhere to fail over to.
 
 ## Verify traces land
 

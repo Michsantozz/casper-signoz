@@ -23,11 +23,20 @@ from the alert you jump to the exact span in the waterfall.
 | `tool-call-failures.json` | traces | `count()` of `tool_call` spans with `error.type` > 5 in the window | `gen_ai.tool.name` |
 | `llm-error-logs.json` | **logs** | `count()` of correlated ERROR log records (`gen_ai.operation.name EXISTS`) > 5 in the window | `gen_ai.operation.name` |
 | `answer-quality-low.json` | traces | avg answer completeness below target | — |
+| `model-failover.json` | traces | any `model_failover` span in the window (`count() > 0`) | `model.failover.to` |
 | `health-watch-down.json` | traces | any `health_watch` span with `mastra.health_watch.ok = false` | `error.type` |
 
 Most use a 5m rolling window, 1m frequency, `matchType: at_least_once`, and
 `renotify` on the `firing` state. Adjust `target`, `evalWindow`, `frequency`,
 and severity labels to taste.
+
+**`model-failover.json`** fires the moment telemetry-driven failover kicks in:
+`createModel()` read the primary provider's own health back out of SigNoz (or hit
+a local error burst) and rerouted to the fallback. Like `health-watch-down`, a
+single occurrence is the signal (`target > 0`) — a failover means the primary is
+degraded *right now* and every turn is paying the fallback's price/latency until
+it recovers. `model.failover.source` says what tripped it (`local` / `signoz` /
+`forced`). See `../../../src/mastra/model-health.ts`.
 
 **`health-watch-down.json` is the exception, deliberately.** It watches the
 watchdog: the autonomous health-watch cron that queries SigNoz on a `*/15`

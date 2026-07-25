@@ -10,6 +10,10 @@
 > **Three** of the track's example builds, in one project: **an AI agent with full E2E observability on SigNoz**, a **SRE Sidekick built on the SigNoz MCP**, and an **Observability Slackbot** (`@casper why did latency spike?` → the SRE-copilot investigates in SigNoz and answers in-thread). Not a toy instrumented for a demo — a **live, multi-tenant production app** whose every agent run, LLM call, tool, RAG hop, and workflow is traced, measured, and alertable in SigNoz.
 
 **If you can't observe your AI agent, you don't own it.** Casper is a real meeting assistant (schedules bots, records calls, writes minutes, reads team dynamics) — and it is wired end-to-end into SigNoz so you can *see inside every autonomous decision it makes*. Then it closes the loop: a **SRE-copilot agent queries CasperAgent's own SigNoz telemetry over MCP**, provisions its own alerts, and watches its own health — an agent observing itself.
+And it goes one step past observing: **telemetry-driven failover** — `createModel()`
+reads the primary LLM provider's own error-rate/p95 back out of SigNoz and reroutes
+to the fallback on its own when it's degraded, emitting a `model_failover` span. The
+observability isn't just visible; it changes what the system does.
 
 ![The Casper meeting notebook — synced player, karaoke transcript, talk-time balance, interruption counts, and tension-flagged moments, side by side with the chat assistant.](.github/assets/meeting-notebook.png)
 
@@ -31,7 +35,7 @@
 
 **④ All three signals, correlated — logs deep-link to traces.** The failure logs aren't a separate stream you grep: each ERROR log record the app emits is **stamped with the failing span's `traceId`+`spanId`** ([`emitErrorLog`](src/mastra/llm-telemetry.ts)), so in SigNoz you click a log line and land on the exact failing LLM/tool/RAG span in the trace waterfall — *click a log, get its trace*. That's the "correlate signals across your stack" goal, built in, not bolted on.
 
-**⑤ Dashboards, alerts & a trace funnel — versioned.** A **21-panel** agent/LLM dashboard ([`deploy/signoz/dashboards/`](deploy/signoz/dashboards/)) spanning **traces, metrics *and* logs** panels, **8 alert rules** ([`deploy/signoz/alerts/`](deploy/signoz/alerts/)) — trace-based, metric-based, *and* logs-based, with trace/metric twins for cost/latency so an alert still fires if the metrics pipeline drops — and a **trace funnel** ([`deploy/signoz/funnels/`](deploy/signoz/funnels/)) modeling the real product agent's `plan → tool → generate` conversion/drop-off. Reproduced end-to-end via a SigNoz **Foundry casting spec** ([`deploy/signoz/casting.yaml`](deploy/signoz/casting.yaml) + `.lock`).
+**⑤ Dashboards, alerts & a trace funnel — versioned.** A **29-panel** agent/LLM dashboard ([`deploy/signoz/dashboards/`](deploy/signoz/dashboards/)) spanning **traces, metrics *and* logs** panels, **9 alert rules** ([`deploy/signoz/alerts/`](deploy/signoz/alerts/)) — trace-based, metric-based, *and* logs-based, with trace/metric twins for cost/latency so an alert still fires if the metrics pipeline drops — and a **trace funnel** ([`deploy/signoz/funnels/`](deploy/signoz/funnels/)) modeling the real product agent's `plan → tool → generate` conversion/drop-off. Reproduced end-to-end via a SigNoz **Foundry casting spec** ([`deploy/signoz/casting.yaml`](deploy/signoz/casting.yaml) + `.lock`).
 
 **⑥ The self-observation loop — the SRE Sidekick.** A dedicated **SRE-copilot agent** ([`src/mastra/agents/sre.agent.ts`](src/mastra/agents/sre.agent.ts)) answers *"how many tokens did I spend today by model?"*, *"which tool is failing the most?"*, *"did any LLM call error in the last hour?"* by querying **CasperAgent's own SigNoz telemetry over the SigNoz MCP** — and its MCP toolset is itself wrapped in telemetry, so the copilot's own reads show up in the traces. On top: an **autonomous health-watch** runs every 15 min and a **weekly reliability report** — both emit their own spans, and the health-watch is *authorized to self-provision a SigNoz alert* when it spots a regression. **The agent observes itself, reasons over what it sees, and acts on it.**
 
@@ -169,8 +173,8 @@ The pitch is up top; this is where the signals live and how they're wired.
 | Self-instrumented LLM/tool/RAG/quality spans + `gen_ai.*` metrics + correlated error logs | [`src/mastra/llm-telemetry.ts`](src/mastra/llm-telemetry.ts), [`src/mastra/agent-quality.ts`](src/mastra/agent-quality.ts) |
 | SRE-copilot (queries own telemetry over SigNoz MCP, self-provisions alerts) | [`src/mastra/agents/sre.agent.ts`](src/mastra/agents/sre.agent.ts), [`src/mastra/mcp-signoz.ts`](src/mastra/mcp-signoz.ts) |
 | Autonomous health-watch + weekly reliability report (own spans) | [`src/server/observability/`](src/server/observability/) |
-| 21-panel agent/LLM dashboard (traces · metrics · logs) | [`deploy/signoz/dashboards/`](deploy/signoz/dashboards/) |
-| 8 alert rules (trace + metric twins, logs-based, health-watch watchdog) | [`deploy/signoz/alerts/`](deploy/signoz/alerts/) |
+| 29-panel agent/LLM dashboard (traces · metrics · logs) | [`deploy/signoz/dashboards/`](deploy/signoz/dashboards/) |
+| 9 alert rules (trace + metric twins, logs-based, health-watch watchdog) | [`deploy/signoz/alerts/`](deploy/signoz/alerts/) |
 | `plan → tool → generate` trace funnel | [`deploy/signoz/funnels/`](deploy/signoz/funnels/) |
 | Reproducible SigNoz stack (server + MCP) | [`deploy/signoz/casting.yaml`](deploy/signoz/casting.yaml) |
 

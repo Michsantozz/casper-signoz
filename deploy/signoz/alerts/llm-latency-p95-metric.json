@@ -3,7 +3,7 @@
   "alertType": "METRIC_BASED_ALERT",
   "ruleType": "threshold_rule",
   "schemaVersion": "v2alpha1",
-  "description": "Metric-native twin of the traces-based p95-latency rule. Reads the first-class OTel histogram gen_ai.client.operation.duration (seconds) instead of aggregating duration_nano off spans. Filtered to the chat operation so it tracks LLM-call latency; threshold is in SECONDS (30s) — the histogram is exported in seconds, unlike the traces rule's nanoseconds.",
+  "description": "Metric-native twin of the traces-based p95-latency rule. Reads the first-class OTel histogram gen_ai.client.operation.duration (seconds) instead of aggregating duration_nano off spans. SigNoz splits an explicit-bucket histogram into .bucket/.sum/.count series, so the queryable name is gen_ai.client.operation.duration.bucket — the bare base name matches nothing and the rule would silently never fire. Filtered to the chat operation so it tracks LLM-call latency; threshold is in SECONDS (30s) — the histogram is exported in seconds, unlike the traces rule's nanoseconds.",
   "condition": {
     "compositeQuery": {
       "queries": [
@@ -15,14 +15,14 @@
             "stepInterval": 60,
             "disabled": false,
             "filter": {
-              "expression": "gen_ai.operation.name = 'chat'"
+              "expression": "service.name = 'casper-assistant' AND deployment.environment.name = 'production' AND gen_ai.operation.name = 'chat'"
             },
             "having": {
               "expression": ""
             },
             "aggregations": [
               {
-                "metricName": "gen_ai.client.operation.duration",
+                "metricName": "gen_ai.client.operation.duration.bucket",
                 "timeAggregation": "p95",
                 "spaceAggregation": "p95"
               }

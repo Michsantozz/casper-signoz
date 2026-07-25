@@ -15,7 +15,7 @@
             "stepInterval": 60,
             "disabled": false,
             "filter": {
-              "expression": "mastra.span.type = 'eval'"
+              "expression": "service.name = 'casper-assistant' AND deployment.environment.name = 'production' AND mastra.span.type = 'eval'"
             },
             "having": {
               "expression": ""

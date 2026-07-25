@@ -15,7 +15,7 @@
             "stepInterval": 60,
             "disabled": false,
             "filter": {
-              "expression": ""
+              "expression": "service.name = 'casper-assistant' AND deployment.environment.name = 'production'"
             },
             "having": {
               "expression": ""

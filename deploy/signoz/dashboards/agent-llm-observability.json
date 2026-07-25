@@ -14,9 +14,22 @@
   "spec": {
     "display": {
       "name": "CasperAgent — Agent & LLM Observability",
-      "description": "Agent-native observability for CasperAgent (Mastra + Fireworks) across all THREE OTLP signals — traces, metrics, AND logs. Traces panels filter on mastra.span.type (model_generation / tool_call / retrieval / eval / health_watch) over the gen_ai.* semantic conventions. Metrics panels read the first-class OTel counters/histogram the app exports (gen_ai.client.*). Logs panels (bottom row) read the correlated ERROR log records the app emits at each failure — each stamped with the failing span's traceId+spanId, so a log line deep-links to its trace. COST on the trace panels is derived by formula at the real Fireworks kimi-k2p7-code rates (a trace-side estimate that does not discount cache-read tokens); the metric cost panel (gen_ai.client.operation.cost) is the exact, cache-accurate USD counter. Trace aggregations filter casper.self_instrumented = true to exclude the duplicate spans the Mastra native exporter emits for the same call."
+      "description": "Agent-native observability for CasperAgent (Mastra + Fireworks) across all THREE OTLP signals — traces, metrics, AND logs. Every query is scoped to service.name = casper-assistant and deployment.environment.name = $environment, so services and deployments cannot silently contaminate one another. Traces panels filter on mastra.span.type (model_generation / tool_call / retrieval / eval / health_watch) over the gen_ai.* semantic conventions. Metrics panels read the first-class OTel counters/histogram the app exports (gen_ai.client.*). Logs panels (bottom row) read the correlated ERROR log records the app emits at each failure — each stamped with the failing span's traceId+spanId, so a log line deep-links to its trace. COST: both the trace formula and the metric counter (gen_ai.client.operation.cost) price every input token at the plain input rate today, because LLM_PRICE_CACHE_READ_PER_MTOK / LLM_PRICE_CACHE_WRITE_PER_MTOK are not configured — the app falls back to the input price for cached tokens (see pricePerToken in src/mastra/llm-telemetry.ts). Cache-read volume is material (620k tokens over the last 24h), so treat the figure as an UPPER BOUND, not an exact bill; set those two env vars to your provider's cache rates and the metric counter becomes the exact, cache-split number. Trace aggregations additionally use casper.self_instrumented = true where appropriate to drop the duplicate span the Mastra native exporter emits for every LLM/tool call."
     },
-    "variables": [],
+    "variables": [
+      {
+        "kind": "TextVariable",
+        "spec": {
+          "name": "environment",
+          "display": {
+            "name": "Environment",
+            "description": "Value of deployment.environment.name used to scope every traces, metrics, and logs query. Defaults to production."
+          },
+          "value": "production",
+          "constant": false
+        }
+      }
+    ],
     "panels": {
       "11111111-1111-1111-1111-111111111111": {
         "kind": "Panel",
@@ -49,7 +62,7 @@
                           "stepInterval": 60,
                           "disabled": false,
                           "filter": {
-                            "expression": "mastra.span.type = 'model_generation' AND casper.self_instrumented = true"
+                            "expression": "service.name = 'casper-assistant' AND deployment.environment.name = $environment AND mastra.span.type = 'model_generation' AND casper.self_instrumented = true"
                           },
                           "having": {
                             "expression": ""
@@ -100,7 +113,7 @@
                           "stepInterval": 60,
                           "disabled": false,
                           "filter": {
-                            "expression": "mastra.span.type = 'model_generation' AND casper.self_instrumented = true"
+                            "expression": "service.name = 'casper-assistant' AND deployment.environment.name = $environment AND mastra.span.type = 'model_generation' AND casper.self_instrumented = true"
                           },
                           "having": {
                             "expression": ""
@@ -128,13 +141,17 @@
         "spec": {
           "display": {
             "name": "Est. cost (USD)",
-            "description": "Derived cost = input_tokens * PRICE_IN + output_tokens * PRICE_OUT, at the real Fireworks kimi-k2p7-code rates ($0.95 / 1M input = 0.00000095, $4.00 / 1M output = 0.000004). This is a trace-side ESTIMATE: it prices the whole input total at the input rate and does not discount cache-read tokens, so it slightly overstates spend on cache-heavy turns. The precise, cache-split figure is the metric cost panel (gen_ai.client.operation.cost) below — trust that for exact USD; use this for the trace-correlated breakdown by model."
+            "description": "Derived cost = input_tokens * PRICE_IN + output_tokens * PRICE_OUT, at the real Fireworks kimi-k2p7-code rates ($0.95 / 1M input = 0.00000095, $4.00 / 1M output = 0.000004). This is a trace-side ESTIMATE: it prices the whole input total at the input rate and does not discount cache-read tokens, so it overstates spend on cache-heavy turns. NOTE: with cache pricing unset, the metric counter (gen_ai.client.operation.cost) currently computes the SAME figure — verified equal at $1.0456 over 24h — so neither number is cache-accurate yet. Set LLM_PRICE_CACHE_READ_PER_MTOK / LLM_PRICE_CACHE_WRITE_PER_MTOK and the metric panel becomes the exact cache-split cost while this one stays the upper bound."
           },
           "plugin": {
             "kind": "signoz/NumberPanel",
             "spec": {
               "visualization": {
                 "timePreference": "global_time"
+              },
+              "formatting": {
+                "unit": "usd",
+                "decimalPrecision": "3"
               }
             }
           },
@@ -154,7 +171,7 @@
                           "stepInterval": 60,
                           "disabled": true,
                           "filter": {
-                            "expression": "mastra.span.type = 'model_generation' AND casper.self_instrumented = true"
+                            "expression": "service.name = 'casper-assistant' AND deployment.environment.name = $environment AND mastra.span.type = 'model_generation' AND casper.self_instrumented = true"
                           },
                           "having": {
                             "expression": ""
@@ -174,7 +191,7 @@
                           "stepInterval": 60,
                           "disabled": true,
                           "filter": {
-                            "expression": "mastra.span.type = 'model_generation' AND casper.self_instrumented = true"
+                            "expression": "service.name = 'casper-assistant' AND deployment.environment.name = $environment AND mastra.span.type = 'model_generation' AND casper.self_instrumented = true"
                           },
                           "having": {
                             "expression": ""
@@ -215,6 +232,10 @@
             "spec": {
               "visualization": {
                 "timePreference": "global_time"
+              },
+              "formatting": {
+                "unit": "ns",
+                "decimalPrecision": "1"
               }
             }
           },
@@ -234,7 +255,7 @@
                           "stepInterval": 60,
                           "disabled": false,
                           "filter": {
-                            "expression": "mastra.span.type = 'model_generation' AND casper.self_instrumented = true"
+                            "expression": "service.name = 'casper-assistant' AND deployment.environment.name = $environment AND mastra.span.type = 'model_generation' AND casper.self_instrumented = true"
                           },
                           "having": {
                             "expression": ""
@@ -285,7 +306,7 @@
                           "stepInterval": 60,
                           "disabled": false,
                           "filter": {
-                            "expression": "mastra.span.type = 'tool_call' AND casper.self_instrumented = true"
+                            "expression": "service.name = 'casper-assistant' AND deployment.environment.name = $environment AND mastra.span.type = 'tool_call' AND casper.self_instrumented = true"
                           },
                           "having": {
                             "expression": ""
@@ -336,7 +357,7 @@
                           "stepInterval": 60,
                           "disabled": false,
                           "filter": {
-                            "expression": "mastra.span.type = 'model_generation' AND casper.self_instrumented = true"
+                            "expression": "service.name = 'casper-assistant' AND deployment.environment.name = $environment AND mastra.span.type = 'model_generation' AND casper.self_instrumented = true"
                           },
                           "groupBy": [
                             {
@@ -364,7 +385,7 @@
                           "stepInterval": 60,
                           "disabled": false,
                           "filter": {
-                            "expression": "mastra.span.type = 'model_generation' AND casper.self_instrumented = true"
+                            "expression": "service.name = 'casper-assistant' AND deployment.environment.name = $environment AND mastra.span.type = 'model_generation' AND casper.self_instrumented = true"
                           },
                           "groupBy": [
                             {
@@ -404,6 +425,10 @@
             "spec": {
               "visualization": {
                 "timePreference": "global_time"
+              },
+              "formatting": {
+                "unit": "usd",
+                "decimalPrecision": "3"
               }
             }
           },
@@ -423,7 +448,7 @@
                           "stepInterval": 60,
                           "disabled": true,
                           "filter": {
-                            "expression": "mastra.span.type = 'model_generation' AND casper.self_instrumented = true"
+                            "expression": "service.name = 'casper-assistant' AND deployment.environment.name = $environment AND mastra.span.type = 'model_generation' AND casper.self_instrumented = true"
                           },
                           "groupBy": [
                             {
@@ -450,7 +475,7 @@
                           "stepInterval": 60,
                           "disabled": true,
                           "filter": {
-                            "expression": "mastra.span.type = 'model_generation' AND casper.self_instrumented = true"
+                            "expression": "service.name = 'casper-assistant' AND deployment.environment.name = $environment AND mastra.span.type = 'model_generation' AND casper.self_instrumented = true"
                           },
                           "groupBy": [
                             {
@@ -498,6 +523,10 @@
             "spec": {
               "visualization": {
                 "timePreference": "global_time"
+              },
+              "formatting": {
+                "unit": "ns",
+                "decimalPrecision": "1"
               }
             }
           },
@@ -517,7 +546,7 @@
                           "stepInterval": 60,
                           "disabled": false,
                           "filter": {
-                            "expression": "mastra.span.type = 'model_generation' AND casper.self_instrumented = true"
+                            "expression": "service.name = 'casper-assistant' AND deployment.environment.name = $environment AND mastra.span.type = 'model_generation' AND casper.self_instrumented = true"
                           },
                           "legend": "p50",
                           "having": {
@@ -538,7 +567,7 @@
                           "stepInterval": 60,
                           "disabled": false,
                           "filter": {
-                            "expression": "mastra.span.type = 'model_generation' AND casper.self_instrumented = true"
+                            "expression": "service.name = 'casper-assistant' AND deployment.environment.name = $environment AND mastra.span.type = 'model_generation' AND casper.self_instrumented = true"
                           },
                           "legend": "p95",
                           "having": {
@@ -559,7 +588,7 @@
                           "stepInterval": 60,
                           "disabled": false,
                           "filter": {
-                            "expression": "mastra.span.type = 'model_generation' AND casper.self_instrumented = true"
+                            "expression": "service.name = 'casper-assistant' AND deployment.environment.name = $environment AND mastra.span.type = 'model_generation' AND casper.self_instrumented = true"
                           },
                           "legend": "p99",
                           "having": {
@@ -611,7 +640,7 @@
                           "stepInterval": 60,
                           "disabled": false,
                           "filter": {
-                            "expression": "mastra.span.type = 'tool_call' AND casper.self_instrumented = true"
+                            "expression": "service.name = 'casper-assistant' AND deployment.environment.name = $environment AND mastra.span.type = 'tool_call' AND casper.self_instrumented = true"
                           },
                           "groupBy": [
                             {
@@ -620,7 +649,7 @@
                               "fieldContext": "tag"
                             }
                           ],
-                          "legend": "{{gen_ai.tool.name}}",
+                          "legend": "calls",
                           "having": {
                             "expression": ""
                           },
@@ -670,7 +699,7 @@
                           "stepInterval": 60,
                           "disabled": false,
                           "filter": {
-                            "expression": "error.type EXISTS"
+                            "expression": "service.name = 'casper-assistant' AND deployment.environment.name = $environment AND error.type EXISTS"
                           },
                           "groupBy": [
                             {
@@ -679,7 +708,7 @@
                               "fieldContext": "tag"
                             }
                           ],
-                          "legend": "{{error.type}}",
+                          "legend": "errors",
                           "having": {
                             "expression": ""
                           },
@@ -710,6 +739,10 @@
             "spec": {
               "visualization": {
                 "timePreference": "global_time"
+              },
+              "formatting": {
+                "unit": "none",
+                "decimalPrecision": "3"
               }
             }
           },
@@ -729,7 +762,7 @@
                           "stepInterval": 60,
                           "disabled": false,
                           "filter": {
-                            "expression": "mastra.span.type = 'eval'"
+                            "expression": "service.name = 'casper-assistant' AND deployment.environment.name = $environment AND mastra.span.type = 'eval'"
                           },
                           "having": {
                             "expression": ""
@@ -761,6 +794,10 @@
             "spec": {
               "visualization": {
                 "timePreference": "global_time"
+              },
+              "formatting": {
+                "unit": "none",
+                "decimalPrecision": "3"
               }
             }
           },
@@ -780,7 +817,7 @@
                           "stepInterval": 60,
                           "disabled": false,
                           "filter": {
-                            "expression": "mastra.span.type = 'eval'"
+                            "expression": "service.name = 'casper-assistant' AND deployment.environment.name = $environment AND mastra.span.type = 'eval'"
                           },
                           "having": {
                             "expression": ""
@@ -831,7 +868,7 @@
                           "stepInterval": 60,
                           "disabled": false,
                           "filter": {
-                            "expression": ""
+                            "expression": "service.name = 'casper-assistant' AND deployment.environment.name = $environment"
                           },
                           "having": {
                             "expression": ""
@@ -873,6 +910,10 @@
             "spec": {
               "visualization": {
                 "timePreference": "global_time"
+              },
+              "formatting": {
+                "unit": "usd",
+                "decimalPrecision": "3"
               }
             }
           },
@@ -892,7 +933,7 @@
                           "stepInterval": 60,
                           "disabled": false,
                           "filter": {
-                            "expression": ""
+                            "expression": "service.name = 'casper-assistant' AND deployment.environment.name = $environment"
                           },
                           "having": {
                             "expression": ""
@@ -927,13 +968,17 @@
         "spec": {
           "display": {
             "name": "Operation p95 latency (metric histogram)",
-            "description": "gen_ai.client.operation.duration histogram, p95, grouped by gen_ai.operation.name (chat / execute_tool / retrieve)."
+            "description": "p95 of the gen_ai.client.operation.duration histogram, grouped by gen_ai.operation.name (chat / execute_tool / retrieve). SigNoz stores an explicit-bucket histogram as separate .bucket/.sum/.count series, so the queryable series is gen_ai.client.operation.duration.bucket and the percentile is taken via spaceAggregation — querying the bare base name returns no data."
           },
           "plugin": {
             "kind": "signoz/TimeSeriesPanel",
             "spec": {
               "visualization": {
                 "timePreference": "global_time"
+              },
+              "formatting": {
+                "unit": "s",
+                "decimalPrecision": "2"
               }
             }
           },
@@ -953,16 +998,16 @@
                           "stepInterval": 60,
                           "disabled": false,
                           "filter": {
-                            "expression": ""
+                            "expression": "service.name = 'casper-assistant' AND deployment.environment.name = $environment"
                           },
                           "having": {
                             "expression": ""
                           },
                           "aggregations": [
                             {
-                              "metricName": "gen_ai.client.operation.duration",
+                              "metricName": "gen_ai.client.operation.duration.bucket",
                               "timeAggregation": "p95",
-                              "spaceAggregation": "sum"
+                              "spaceAggregation": "p95"
                             }
                           ],
                           "groupBy": [
@@ -995,6 +1040,10 @@
             "spec": {
               "visualization": {
                 "timePreference": "global_time"
+              },
+              "formatting": {
+                "unit": "ns",
+                "decimalPrecision": "1"
               }
             }
           },
@@ -1014,7 +1063,7 @@
                           "stepInterval": 60,
                           "disabled": false,
                           "filter": {
-                            "expression": "mastra.span.type = 'retrieval'"
+                            "expression": "service.name = 'casper-assistant' AND deployment.environment.name = $environment AND mastra.span.type = 'retrieval'"
                           },
                           "groupBy": [
                             {
@@ -1054,6 +1103,10 @@
             "spec": {
               "visualization": {
                 "timePreference": "global_time"
+              },
+              "formatting": {
+                "unit": "none",
+                "decimalPrecision": "3"
               }
             }
           },
@@ -1073,7 +1126,7 @@
                           "stepInterval": 60,
                           "disabled": false,
                           "filter": {
-                            "expression": "mastra.span.type = 'retrieval'"
+                            "expression": "service.name = 'casper-assistant' AND deployment.environment.name = $environment AND mastra.span.type = 'retrieval'"
                           },
                           "groupBy": [
                             {
@@ -1132,7 +1185,7 @@
                           "stepInterval": 60,
                           "disabled": false,
                           "filter": {
-                            "expression": "mastra.span.type = 'retrieval' AND gen_ai.retrieval.returned_count = 0"
+                            "expression": "service.name = 'casper-assistant' AND deployment.environment.name = $environment AND mastra.span.type = 'retrieval' AND gen_ai.retrieval.returned_count = 0"
                           },
                           "having": {
                             "expression": ""
@@ -1183,7 +1236,7 @@
                           "stepInterval": 60,
                           "disabled": false,
                           "filter": {
-                            "expression": "mastra.span.type = 'health_watch'"
+                            "expression": "service.name = 'casper-assistant' AND deployment.environment.name = $environment AND mastra.span.type = 'health_watch'"
                           },
                           "having": {
                             "expression": ""
@@ -1234,7 +1287,7 @@
                           "stepInterval": 60,
                           "disabled": false,
                           "filter": {
-                            "expression": "gen_ai.operation.name EXISTS"
+                            "expression": "service.name = 'casper-assistant' AND deployment.environment.name = $environment AND gen_ai.operation.name EXISTS"
                           },
                           "groupBy": [
                             {
@@ -1293,7 +1346,7 @@
                           "stepInterval": 60,
                           "disabled": false,
                           "filter": {
-                            "expression": "gen_ai.operation.name EXISTS"
+                            "expression": "service.name = 'casper-assistant' AND deployment.environment.name = $environment AND gen_ai.operation.name EXISTS"
                           },
                           "groupBy": [
                             {
@@ -1302,7 +1355,7 @@
                               "fieldContext": "attribute"
                             }
                           ],
-                          "legend": "{{error.type}}",
+                          "legend": "log records",
                           "having": {
                             "expression": ""
                           },
@@ -1352,7 +1405,7 @@
                           "stepInterval": 60,
                           "disabled": false,
                           "filter": {
-                            "expression": "gen_ai.operation.name = 'invoke_agent'"
+                            "expression": "service.name = 'casper-assistant' AND deployment.environment.name = $environment AND gen_ai.operation.name = 'invoke_agent'"
                           },
                           "having": {
                             "expression": ""
@@ -1403,7 +1456,7 @@
                           "stepInterval": 60,
                           "disabled": false,
                           "filter": {
-                            "expression": "gen_ai.operation.name = 'execute_tool'"
+                            "expression": "service.name = 'casper-assistant' AND deployment.environment.name = $environment AND gen_ai.operation.name = 'execute_tool' AND casper.in_agent_run = true"
                           },
                           "having": {
                             "expression": ""
@@ -1454,7 +1507,7 @@
                           "stepInterval": 60,
                           "disabled": false,
                           "filter": {
-                            "expression": "gen_ai.operation.name = 'chat' AND casper.self_instrumented = true"
+                            "expression": "service.name = 'casper-assistant' AND deployment.environment.name = $environment AND gen_ai.operation.name = 'chat' AND casper.self_instrumented = true AND casper.in_agent_run = true"
                           },
                           "having": {
                             "expression": ""
@@ -1486,6 +1539,10 @@
             "spec": {
               "visualization": {
                 "timePreference": "global_time"
+              },
+              "formatting": {
+                "unit": "percent",
+                "decimalPrecision": "1"
               }
             }
           },
@@ -1505,7 +1562,7 @@
                           "stepInterval": 60,
                           "disabled": true,
                           "filter": {
-                            "expression": "gen_ai.operation.name = 'invoke_agent'"
+                            "expression": "service.name = 'casper-assistant' AND deployment.environment.name = $environment AND gen_ai.operation.name = 'invoke_agent'"
                           },
                           "having": {
                             "expression": ""
@@ -1525,7 +1582,7 @@
                           "stepInterval": 60,
                           "disabled": true,
                           "filter": {
-                            "expression": "gen_ai.operation.name = 'execute_tool'"
+                            "expression": "service.name = 'casper-assistant' AND deployment.environment.name = $environment AND gen_ai.operation.name = 'execute_tool' AND casper.in_agent_run = true"
                           },
                           "having": {
                             "expression": ""
@@ -1566,6 +1623,10 @@
             "spec": {
               "visualization": {
                 "timePreference": "global_time"
+              },
+              "formatting": {
+                "unit": "percent",
+                "decimalPrecision": "1"
               }
             }
           },
@@ -1585,7 +1646,7 @@
                           "stepInterval": 60,
                           "disabled": true,
                           "filter": {
-                            "expression": "gen_ai.operation.name = 'execute_tool'"
+                            "expression": "service.name = 'casper-assistant' AND deployment.environment.name = $environment AND gen_ai.operation.name = 'execute_tool' AND casper.in_agent_run = true"
                           },
                           "having": {
                             "expression": ""
@@ -1605,7 +1666,7 @@
                           "stepInterval": 60,
                           "disabled": true,
                           "filter": {
-                            "expression": "gen_ai.operation.name = 'chat' AND casper.self_instrumented = true"
+                            "expression": "service.name = 'casper-assistant' AND deployment.environment.name = $environment AND gen_ai.operation.name = 'chat' AND casper.self_instrumented = true AND casper.in_agent_run = true"
                           },
                           "having": {
                             "expression": ""
@@ -1647,7 +1708,7 @@
           },
           "queries": [
             {
-              "kind": "timeseries",
+              "kind": "time_series",
               "spec": {
                 "plugin": {
                   "kind": "signoz/CompositeQuery",
@@ -1661,7 +1722,7 @@
                           "stepInterval": 60,
                           "disabled": false,
                           "filter": {
-                            "expression": "gen_ai.operation.name = 'invoke_agent'"
+                            "expression": "service.name = 'casper-assistant' AND deployment.environment.name = $environment AND gen_ai.operation.name = 'invoke_agent'"
                           },
                           "groupBy": [],
                           "legend": "runs",
@@ -1683,7 +1744,7 @@
                           "stepInterval": 60,
                           "disabled": false,
                           "filter": {
-                            "expression": "gen_ai.operation.name = 'execute_tool'"
+                            "expression": "service.name = 'casper-assistant' AND deployment.environment.name = $environment AND gen_ai.operation.name = 'execute_tool' AND casper.in_agent_run = true"
                           },
                           "groupBy": [],
                           "legend": "reached tool",
@@ -1705,7 +1766,7 @@
                           "stepInterval": 60,
                           "disabled": false,
                           "filter": {
-                            "expression": "gen_ai.operation.name = 'chat' AND casper.self_instrumented = true"
+                            "expression": "service.name = 'casper-assistant' AND deployment.environment.name = $environment AND gen_ai.operation.name = 'chat' AND casper.self_instrumented = true AND casper.in_agent_run = true"
                           },
                           "groupBy": [],
                           "legend": "reached generation",
@@ -1715,6 +1776,121 @@
                           "aggregations": [
                             {
                               "expression": "count_distinct(trace_id)"
+                            }
+                          ]
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "f0f0f0f0-0000-0000-0000-00000000fo01": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Model failovers",
+            "description": "Times createModel() rerouted off the configured primary to the fallback provider because model-health judged it degraded (mastra.span.type = model_failover). Telemetry-driven failover: SigNoz is the runtime input, not just a dashboard. 0 in a healthy window; a nonzero count means the primary's error-rate or p95 crossed threshold and the system protected the turn on its own."
+          },
+          "plugin": {
+            "kind": "signoz/NumberPanel",
+            "spec": {
+              "visualization": {
+                "timePreference": "global_time"
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "scalar",
+              "spec": {
+                "plugin": {
+                  "kind": "signoz/CompositeQuery",
+                  "spec": {
+                    "queries": [
+                      {
+                        "type": "builder_query",
+                        "spec": {
+                          "name": "A",
+                          "signal": "traces",
+                          "stepInterval": 60,
+                          "disabled": false,
+                          "filter": {
+                            "expression": "service.name = 'casper-assistant' AND deployment.environment.name = $environment AND mastra.span.type = 'model_failover' AND casper.self_instrumented = true"
+                          },
+                          "having": {
+                            "expression": ""
+                          },
+                          "aggregations": [
+                            {
+                              "expression": "count()"
+                            }
+                          ]
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "f0f0f0f0-0000-0000-0000-00000000fo02": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Failovers by target & trigger",
+            "description": "model_failover spans grouped by the provider we failed over TO (model.failover.to) and the signal that triggered it (model.failover.source: local = this pod's recent error burst, signoz = fleet-wide error-rate/p95 regression read back from SigNoz, forced = demo override). Answers 'when we rerouted, where did traffic go and what saw the problem first'."
+          },
+          "plugin": {
+            "kind": "signoz/TablePanel",
+            "spec": {
+              "visualization": {
+                "timePreference": "global_time"
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "scalar",
+              "spec": {
+                "plugin": {
+                  "kind": "signoz/CompositeQuery",
+                  "spec": {
+                    "queries": [
+                      {
+                        "type": "builder_query",
+                        "spec": {
+                          "name": "A",
+                          "signal": "traces",
+                          "stepInterval": 60,
+                          "disabled": false,
+                          "filter": {
+                            "expression": "service.name = 'casper-assistant' AND deployment.environment.name = $environment AND mastra.span.type = 'model_failover' AND casper.self_instrumented = true"
+                          },
+                          "groupBy": [
+                            {
+                              "name": "model.failover.to",
+                              "fieldDataType": "string",
+                              "fieldContext": "tag"
+                            },
+                            {
+                              "name": "model.failover.source",
+                              "fieldDataType": "string",
+                              "fieldContext": "tag"
+                            }
+                          ],
+                          "legend": "failovers",
+                          "having": {
+                            "expression": ""
+                          },
+                          "aggregations": [
+                            {
+                              "expression": "count()"
                             }
                           ]
                         }
@@ -1974,6 +2150,24 @@
               "height": 5,
               "content": {
                 "$ref": "#/spec/panels/ffffffff-0000-0000-0000-0000000cv006"
+              }
+            },
+            {
+              "x": 0,
+              "y": 47,
+              "width": 2,
+              "height": 3,
+              "content": {
+                "$ref": "#/spec/panels/f0f0f0f0-0000-0000-0000-00000000fo01"
+              }
+            },
+            {
+              "x": 2,
+              "y": 47,
+              "width": 5,
+              "height": 3,
+              "content": {
+                "$ref": "#/spec/panels/f0f0f0f0-0000-0000-0000-00000000fo02"
               }
             }
           ]
