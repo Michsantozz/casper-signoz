@@ -33,8 +33,9 @@ Jul 23 rather than showing years of it. Stating that plainly so nobody has to
 infer it from a commit graph.
 
 **The entire observability layer was built inside the hackathon window** (Jul 20–26,
-2026): 44 commits, `2989fdd..HEAD`, **109 files, ~15k insertions**, all dated
-Jul 23–25. That import carried exactly three SigNoz-touching files — `SIGNOZ.md`,
+2026): every commit after that import — `2989fdd..HEAD`, **~110 files, ~15k
+insertions** — is dated Jul 23–25. That import carried exactly three
+SigNoz-touching files — `SIGNOZ.md`,
 `src/mastra/observability.ts`, and one test, i.e. a bare OTLP exporter hookup.
 Everything the tracks are judged on came after it:
 
@@ -48,8 +49,8 @@ the trace funnel · the notification channel · the Foundry casting spec ·
 Verify it directly:
 
 ```bash
-git log --oneline 2989fdd..HEAD          # 44 commits, all Jul 23–25
-git diff --stat 2989fdd..HEAD            # 109 files, ~15k insertions
+git log --oneline 2989fdd..HEAD          # the hackathon work, all Jul 23–25
+git diff --stat 2989fdd..HEAD            # ~110 files, ~15k insertions
 git show --stat 2989fdd | tail -1        # the squashed import of the prior product
 ```
 
