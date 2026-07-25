@@ -102,6 +102,21 @@ function errorOf(r: { json: unknown; text: string }): string {
   );
 }
 
+/** Key-order-insensitive equality, for "did this asset actually change". */
+function deepEqual(a: unknown, b: unknown): boolean {
+  const sort = (v: unknown): unknown =>
+    Array.isArray(v)
+      ? v.map(sort)
+      : v && typeof v === "object"
+        ? Object.fromEntries(
+            Object.entries(v as Record<string, unknown>)
+              .sort(([x], [y]) => x.localeCompare(y))
+              .map(([k, val]) => [k, sort(val)]),
+          )
+        : v;
+  return JSON.stringify(sort(a)) === JSON.stringify(sort(b));
+}
+
 async function readJsonDir(dir: string): Promise<{ file: string; body: Record<string, unknown> }[]> {
   const full = path.join(ROOT, dir);
   const files = (await readdir(full)).filter((f) => f.endsWith(".json"));
@@ -146,29 +161,50 @@ async function preflight(): Promise<void> {
 async function importChannels(): Promise<void> {
   console.log("Notification channels");
   const existing = await api("GET", "/api/v1/channels");
-  const byName = new Map<string, string>();
+  const byName = new Map<string, { id: string; data?: string }>();
   for (const c of ((existing.json as { data?: unknown[] })?.data ?? []) as {
     id?: string;
     name?: string;
+    data?: string;
   }[]) {
-    if (c.name && c.id) byName.set(c.name, c.id);
+    if (c.name && c.id) byName.set(c.name, { id: c.id, data: c.data });
   }
 
   for (const { file, body } of await readJsonDir("channels")) {
     const name = String(body.name ?? "");
-    const id = byName.get(name);
+    const found = byName.get(name);
+
+    // Channel UPDATES need an admin key while everything else works with the
+    // editor service account — so before touching it, check whether the live
+    // channel already IS the versioned one (the list's `data` field is the
+    // channel body serialized). Unchanged → converged, no write, no admin.
+    if (found?.data) {
+      try {
+        if (deepEqual(JSON.parse(found.data), body)) {
+          skip(`${file} → channel "${name}" unchanged`);
+          continue;
+        }
+      } catch {
+        // Unparseable data → treat as changed and fall through to the PUT.
+      }
+    }
+
     if (DRY_RUN) {
-      skip(`${file} → would ${id ? "update" : "create"} channel "${name}"`);
+      skip(`${file} → would ${found ? "update" : "create"} channel "${name}"`);
       continue;
     }
-    const res = id
-      ? await api("PUT", `/api/v1/channels/${id}`, body)
+    const res = found
+      ? await api("PUT", `/api/v1/channels/${found.id}`, body)
       : await api("POST", "/api/v1/channels", body);
     if (res.status >= 200 && res.status < 300) {
-      ok(`${file} → channel "${name}" ${id ? "updated" : "created"}`);
+      ok(`${file} → channel "${name}" ${found ? "updated" : "created"}`);
     } else {
       failures++;
-      bad(`${file} → HTTP ${res.status}: ${errorOf(res)}`);
+      const hint =
+        res.status === 403
+          ? " (channel updates need an ADMIN service-account key; the editor role only creates)"
+          : "";
+      bad(`${file} → HTTP ${res.status}: ${errorOf(res)}${hint}`);
     }
   }
 }
@@ -199,8 +235,9 @@ async function importDashboards(): Promise<void> {
   // of updating the one already on screen — the exact duplicate-pile this
   // script exists to prevent. Title is the stable identity; the slug is a
   // secondary key.
-  const bySlug = new Map<string, string>();
-  const byTitle = new Map<string, string>();
+  type Existing = { id: string; storedSlug?: string };
+  const bySlug = new Map<string, Existing>();
+  const byTitle = new Map<string, Existing>();
   for (const d of ((existing.json as { data?: { dashboards?: unknown[] } })?.data
     ?.dashboards ?? []) as {
     id?: string;
@@ -208,9 +245,10 @@ async function importDashboards(): Promise<void> {
     spec?: { display?: { name?: string } };
   }[]) {
     if (!d.id) continue;
-    if (d.name) bySlug.set(d.name, d.id);
+    const entry: Existing = { id: d.id, storedSlug: d.name };
+    if (d.name) bySlug.set(d.name, entry);
     const title = d.spec?.display?.name;
-    if (title) byTitle.set(title, d.id);
+    if (title) byTitle.set(title, entry);
   }
 
   for (const { file, body } of await readJsonDir("dashboards")) {
@@ -218,9 +256,15 @@ async function importDashboards(): Promise<void> {
       | { display?: { name?: string }; panels?: Record<string, unknown> }
       | undefined;
     const title = spec?.display?.name ?? String(body.name ?? file);
-    const name = slugify(String(body.name ?? title));
+    const slug = slugify(String(body.name ?? title));
     const panelCount = Object.keys(spec?.panels ?? {}).length;
-    const id = byTitle.get(title) ?? bySlug.get(name);
+    const found = byTitle.get(title) ?? bySlug.get(slug);
+    const id = found?.id;
+    // The API treats `name` (the slug) as IMMUTABLE after creation — updating
+    // the title-matched dashboard with the versioned title's slug is a 400. On
+    // update, keep whatever slug the live dashboard already carries; the slug
+    // is an address, the title is the identity.
+    const name = found?.storedSlug ?? slug;
 
     if (DRY_RUN) {
       skip(
@@ -232,7 +276,12 @@ async function importDashboards(): Promise<void> {
     const payload = {
       schemaVersion: body.schemaVersion ?? "v6",
       name,
-      tags: body.tags ?? [],
+      // The v2 API rejects plain-string tags ("try sending 'tagtypes.
+      // PostableTag'") and serializes them back as {key, value} pairs — accept
+      // the human-friendly string form in the versioned JSON and convert here.
+      tags: ((body.tags as unknown[] | undefined) ?? []).map((tag) =>
+        typeof tag === "string" ? { key: tag, value: "true" } : tag,
+      ),
       spec: body.spec,
     };
     const res = id

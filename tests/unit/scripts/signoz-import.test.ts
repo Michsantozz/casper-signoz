@@ -33,14 +33,21 @@ function assetNames(dir: string, field: string): string[] {
 const CHANNEL_NAMES = assetNames("channels", "name");
 const ALERT_NAMES = assetNames("alerts", "alert");
 const DASHBOARD_TITLES = assetNames("dashboards", "name");
+/** Same order as CHANNEL_NAMES — readdirSync is stable for a given directory. */
+const CHANNEL_FILES = readdirSync(join(ROOT, "deploy", "signoz", "channels")).filter(
+  (f) => f.endsWith(".json"),
+);
 
 type Call = { method: string; url: string; body?: unknown };
 
 type MockState = {
-  channels?: { id: string; name: string }[];
+  // `data` mirrors the live API: the channel body, serialized as a string.
+  channels?: { id: string; name: string; data?: string }[];
   rules?: { id: string; alert: string }[];
   dashboards?: { id: string; name: string; spec?: { display?: { name?: string } } }[];
   ruleTestStatus?: number;
+  /** Status returned for a specific write route, to model the real 403/400s. */
+  writeStatus?: { route: string; status: number; body?: unknown };
 };
 
 let server: Server | undefined;
@@ -78,6 +85,12 @@ async function startMockSignoz(state: MockState = {}) {
         return json(state.ruleTestStatus ?? 200, {
           error: { message: "bad expression" },
         });
+      const forced = state.writeStatus;
+      if (forced && route.startsWith(forced.route))
+        return json(
+          forced.status,
+          forced.body ?? { error: { message: "forced by test" } },
+        );
       // Any write — accept it; the assertions read `calls`, not the responses.
       return json(200, { data: {} });
     });
@@ -184,6 +197,95 @@ describe("scripts/signoz-import.ts against a mock SigNoz API", () => {
     for (const [i] of ALERT_NAMES.entries()) {
       expect(writes.map((c) => c.url)).toContain(`/api/v2/rules/rule-${i}`);
     }
+  }, 30_000);
+
+  // ── The three failures the first live run against SigNoz v0.134 turned up.
+  // Every one of them passed the mock-free unit tests and still broke on the
+  // real API, so each gets pinned here.
+
+  it("converts string tags to the {key,value} pairs the v2 API demands", async () => {
+    // The versioned JSON carries human-friendly `"tags": ["casper", "llm"]`.
+    // POSTing that verbatim is a 400: "value of type 'string' was received for
+    // field 'tags', try sending 'tagtypes.PostableTag' instead".
+    const { calls, url } = await startMockSignoz();
+    const result = await runImport([], url);
+
+    expect(result.code, result.stderr).toBe(0);
+    const dashboard = calls
+      .filter(isWrite)
+      .find((c) => c.url.startsWith("/api/v2/dashboards"));
+    const tags = (dashboard?.body as { tags?: unknown[] }).tags ?? [];
+    expect(tags.length).toBeGreaterThan(0);
+    for (const tag of tags) {
+      expect(typeof tag, `tag still a bare string: ${JSON.stringify(tag)}`).toBe(
+        "object",
+      );
+      expect(tag).toHaveProperty("key");
+      expect(tag).toHaveProperty("value");
+    }
+  }, 30_000);
+
+  it("keeps the live dashboard's slug on update — the API treats name as immutable", async () => {
+    // Matching by title finds the hand-created dashboard, but PUTting the
+    // versioned title's slug onto it is a 400: "name is immutable; cannot
+    // change from X to Y". The slug is an address, the title is the identity.
+    const { calls, url } = await startMockSignoz({
+      dashboards: DASHBOARD_TITLES.map((title, i) => ({
+        id: `dash-${i}`,
+        name: `hand-typed-slug-${i}`,
+        spec: { display: { name: title } },
+      })),
+    });
+    const result = await runImport([], url);
+
+    expect(result.code, result.stderr).toBe(0);
+    const put = calls
+      .filter(isWrite)
+      .find((c) => c.url === "/api/v2/dashboards/dash-0");
+    expect(put, "expected an in-place update of the title-matched dashboard").toBeDefined();
+    expect((put!.body as { name?: string }).name).toBe("hand-typed-slug-0");
+  }, 30_000);
+
+  it("skips an unchanged channel instead of needing an admin key to rewrite it", async () => {
+    // Channel UPDATES are admin-only; the editor service account that applies
+    // everything else gets 403 ("only admins can access this resource"). That
+    // failed the whole run over a channel that was already correct — so when
+    // the live body already equals the versioned one, converge without writing.
+    const channels = CHANNEL_NAMES.map((name, i) => ({
+      id: `ch-${i}`,
+      name,
+      data: readFileSync(
+        join(ROOT, "deploy/signoz/channels", `${CHANNEL_FILES[i]}`),
+        "utf8",
+      ),
+    }));
+    const { calls, url } = await startMockSignoz({ channels });
+    const result = await runImport([], url);
+
+    expect(result.code, result.stderr).toBe(0);
+    expect(
+      calls.filter(isWrite).filter((c) => c.url.startsWith("/api/v1/channels")),
+    ).toEqual([]);
+    expect(result.stdout).toContain("unchanged");
+  }, 30_000);
+
+  it("explains the admin-key requirement when a changed channel is refused", async () => {
+    const { url } = await startMockSignoz({
+      channels: CHANNEL_NAMES.map((name, i) => ({
+        id: `ch-${i}`,
+        name,
+        data: JSON.stringify({ name, webhook_configs: [{ url: "http://drift" }] }),
+      })),
+      writeStatus: {
+        route: "PUT /api/v1/channels",
+        status: 403,
+        body: { error: { message: "only admins can access this resource" } },
+      },
+    });
+    const result = await runImport([], url);
+
+    expect(result.code).not.toBe(0);
+    expect(result.stdout + result.stderr).toContain("ADMIN");
   }, 30_000);
 
   it("exits non-zero when a rule fails server-side validation", async () => {

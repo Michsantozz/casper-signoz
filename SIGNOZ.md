@@ -141,6 +141,24 @@ service-account key (`SIGNOZ-API-KEY` header). **One command applies all of it:*
    anything is written; `--only=channels|dashboards|alerts` narrows the run.
    Exits non-zero on any failure. Source: [`scripts/signoz-import.ts`](scripts/signoz-import.ts).
 
+   Three things the v0.134 API demands that the versioned JSON does not spell
+   out, all found by running this against a real instance and all handled by the
+   script (pinned in `tests/unit/scripts/signoz-import.test.ts`):
+   - **Dashboard tags** must be `{key, value}` pairs; a bare `"tags": ["casper"]`
+     is a 400 (`try sending 'tagtypes.PostableTag'`). The JSON keeps the readable
+     string form and the script converts.
+   - **A dashboard's `name` (slug) is immutable.** Identity is matched on the
+     human title, so a dashboard first created by hand keeps whatever slug the
+     operator typed; sending the versioned title's slug on update is a 400. The
+     script preserves the stored slug — the slug is an address, the title is the
+     identity.
+   - **Channel *updates* are admin-only.** An editor service account — enough for
+     dashboards and every rule — gets `403 only admins can access this resource`
+     on `PUT /api/v1/channels/{id}`. The script compares the live channel body
+     against the versioned one first and skips the write when they already agree,
+     so an editor key applies the whole pack. Actually *changing* the channel
+     still needs an admin key, and the error says so.
+
 The endpoints it drives, if you'd rather do it by hand: `POST /api/v1/channels`,
 `POST /api/v2/dashboards` (body `{ schemaVersion, name (RFC-1123 slug),
 tags:[{key,value}], spec }` — the JSON's `spec` is used as-is), and
