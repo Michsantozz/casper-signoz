@@ -1,6 +1,6 @@
 # 🛰️ Casper Agent — E2E Observability for a Real AI Agent
 
-[![CI](https://github.com/Michsantozz/karaforcasper/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Michsantozz/karaforcasper/actions/workflows/ci.yml)
+[![CI](https://github.com/Michsantozz/casper-signoz/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Michsantozz/casper-signoz/actions/workflows/ci.yml)
 ![Next.js](https://img.shields.io/badge/Next.js-16-black?logo=nextdotjs)
 ![OpenTelemetry](https://img.shields.io/badge/OpenTelemetry-native-f5a800?logo=opentelemetry)
 ![SigNoz](https://img.shields.io/badge/SigNoz-traces·metrics·logs-e75a34)
@@ -19,7 +19,7 @@ observability isn't just visible; it changes what the system does.
 
 - 🌐 **Live app:** https://casper.careglyph.com
 - 📊 **Observability guide (start here for judging):** [`SIGNOZ.md`](SIGNOZ.md)
-- 💻 **Repo:** https://github.com/Michsantozz/karaforcasper
+- 💻 **Repo:** https://github.com/Michsantozz/casper-signoz
 
 ---
 
