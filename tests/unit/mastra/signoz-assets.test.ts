@@ -183,14 +183,25 @@ describe("versioned SigNoz assets", () => {
     }
   });
 
-  it("keeps the trace funnel ordered, scoped, and aimed at the product agent", () => {
+  it("keeps the trace funnel ordered, scoped, and on an agent that actually emits its steps", () => {
     // SigNoz funnel steps match by exact `service_name` + `span_name`; the
     // per-step attribute filter is only a refinement (verified on v0.134 — see
     // deploy/signoz/funnels/README.md). Mastra names spans `<operation>
     // <entityName>`, so each step's span_name must open with the operation its
     // own mastra.span.type filter claims, or the step silently never matches
-    // and the funnel reads as 100% drop-off. Also pin the entity: an earlier
-    // version aimed at the SRE copilot, which no user traffic hits.
+    // and the funnel reads as 100% drop-off.
+    //
+    // The entity matters just as much, and this is the part that shipped WRONG:
+    // the funnel pointed at "Casper Assistant", the top-level supervisor. That
+    // agent never emits `invoke_agent` or `model_inference` at all — Mastra
+    // emits those only for a SUB-agent invoked as a tool, while the supervisor
+    // turn (handleChatStream) produces `model_chunk Casper Assistant` instead.
+    // So steps 1 and 3 matched nothing and the whole funnel read as zero, in
+    // silence. Measured against the live instance on 2026-07-25: 0 traces in 24h
+    // carried `invoke_agent Casper Assistant`, while `invoke_agent Meeting
+    // Search Specialist` carried 5. Pin the supervisor OUT by name so this
+    // cannot regress — a funnel that matches nothing looks identical to a
+    // pipeline with no traffic.
     const funnel = readJson(
       join(process.cwd(), "deploy/signoz/funnels/agent-pipeline-funnel.json"),
     ) as {
@@ -228,9 +239,24 @@ describe("versioned SigNoz assets", () => {
       ).toBe(true);
     });
 
-    // First and last steps are the agent itself; they must name the PRODUCT
-    // agent so the funnel measures real user traffic, not self-observability.
-    expect(steps[0]!.span_name).toBe("invoke_agent Casper Assistant");
-    expect(steps.at(-1)!.span_name).toBe("model_inference Casper Assistant");
+    // Steps 1 and 3 are the agent itself. Both must name the SAME entity — a
+    // funnel that starts on one agent and ends on another measures nothing
+    // coherent — and that entity must be one that actually emits these spans.
+    const entityOf = (name: string | undefined, operation: string) =>
+      (name ?? "").slice(operation.length + 1);
+    const first = entityOf(steps[0]!.span_name, "invoke_agent");
+    const last = entityOf(steps.at(-1)!.span_name, "model_inference");
+    expect(first).not.toBe("");
+    expect(last, "steps 1 and 3 must follow the same agent").toBe(first);
+
+    // The supervisor is the one entity that CANNOT be a funnel step (see above).
+    // Also keep the self-observability agent out: it runs on cron, so a funnel
+    // aimed at it reports the app watching itself, not user traffic.
+    for (const forbidden of ["Casper Assistant", "SRE Health Automation"]) {
+      expect(
+        first,
+        `"${forbidden}" cannot anchor the funnel — it emits no invoke_agent/model_inference span pair from real user traffic`,
+      ).not.toBe(forbidden);
+    }
   });
 });

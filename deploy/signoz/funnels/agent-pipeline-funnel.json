@@ -1,12 +1,12 @@
 {
   "funnel_name": "CasperAgent — plan → tool → generate",
-  "description": "Agent pipeline funnel over Mastra's native trace spans for the PRODUCT agent users actually talk to (Casper Assistant): how many agent runs reach tool execution, and how many of those reach the final generation. Conversion / drop-off per phase — observability that only makes sense for an agent. Steps match by service_name + span_name on the same trace, in temporal order (see README for the span_name caveat).",
+  "description": "Agent pipeline funnel over Mastra's native trace spans for the Meeting Search Specialist — the product sub-agent the supervisor delegates every meeting question to, so this is the path real user traffic takes. How many agent runs reach the search tool, and how many of those reach the final generation. Conversion / drop-off per phase — observability that only makes sense for an agent. Steps match by service_name + span_name on the same trace, in temporal order. Span names verified against live production traces on 2026-07-25 (see README: the supervisor turn itself emits NO invoke_agent span, so it cannot be a funnel step).",
   "steps": [
     {
       "step_order": 1,
       "name": "invoke_agent",
       "service_name": "casper-assistant",
-      "span_name": "invoke_agent Casper Assistant",
+      "span_name": "invoke_agent Meeting Search Specialist",
       "filters": {
         "op": "AND",
         "items": [
@@ -18,7 +18,7 @@
       "step_order": 2,
       "name": "tool_call",
       "service_name": "casper-assistant",
-      "span_name": "execute_tool list_calendar_events",
+      "span_name": "execute_tool search_my_meetings",
       "filters": {
         "op": "AND",
         "items": [
@@ -30,7 +30,7 @@
       "step_order": 3,
       "name": "generate",
       "service_name": "casper-assistant",
-      "span_name": "model_inference Casper Assistant",
+      "span_name": "model_inference Meeting Search Specialist",
       "filters": {
         "op": "AND",
         "items": [
