@@ -1379,7 +1379,7 @@
         "spec": {
           "display": {
             "name": "Pipeline: runs",
-            "description": "Distinct agent runs started in the window (count_distinct trace by gen_ai.operation.name = invoke_agent). The top of the pipeline."
+            "description": "Distinct agent runs started in the window (count_distinct trace over spans carrying casper.in_agent_run). The top of the pipeline. NOT gen_ai.operation.name = invoke_agent: Mastra emits that span only for SUB-agents invoked as a tool, so the top-level supervisor turn — the majority of real traffic — was missing from the denominator while its tool and generation spans still counted, which is what pushed the conversion tiles above 100%. casper.in_agent_run is set from a live Mastra AISpan, so it covers both and excludes workflow traffic by construction (verified live: 0 of 34 workflow traces carry it)."
           },
           "plugin": {
             "kind": "signoz/NumberPanel",
@@ -1405,7 +1405,7 @@
                           "stepInterval": 60,
                           "disabled": false,
                           "filter": {
-                            "expression": "service.name = 'casper-assistant' AND deployment.environment.name = $environment AND gen_ai.operation.name = 'invoke_agent'"
+                            "expression": "service.name = 'casper-assistant' AND deployment.environment.name = $environment AND casper.in_agent_run = true"
                           },
                           "having": {
                             "expression": ""
@@ -1532,7 +1532,7 @@
         "spec": {
           "display": {
             "name": "Tool conversion %",
-            "description": "Of the runs that started, what % reached a tool call = reached-tool / runs. Robust attribute-based funnel step 1 -> 2."
+            "description": "Of the runs that started, what % reached a tool call = reached-tool / runs. Attribute-based, so it counts EVERY tool rather than one hardcoded name and survives tool renames. Bounded by 100% by construction: reached-tool is a subset of runs, both counted over casper.in_agent_run."
           },
           "plugin": {
             "kind": "signoz/NumberPanel",
@@ -1562,7 +1562,7 @@
                           "stepInterval": 60,
                           "disabled": true,
                           "filter": {
-                            "expression": "service.name = 'casper-assistant' AND deployment.environment.name = $environment AND gen_ai.operation.name = 'invoke_agent'"
+                            "expression": "service.name = 'casper-assistant' AND deployment.environment.name = $environment AND casper.in_agent_run = true"
                           },
                           "having": {
                             "expression": ""
@@ -1616,7 +1616,7 @@
         "spec": {
           "display": {
             "name": "Generation conversion %",
-            "description": "Of the runs that reached a tool, what % reached a final generation = reached-generation / reached-tool. Funnel step 2 -> 3; a low value means runs error or stall after tools."
+            "description": "Of the runs that started, what % reached a final generation = reached-generation / runs. Measured against the TOP of the funnel, not against reached-tool: a generation does not require a tool (the agent answers directly whenever it has enough context), so reached-generation is not a subset of reached-tool and dividing by it produced values above 100%. A low value here means runs error or stall before answering."
           },
           "plugin": {
             "kind": "signoz/NumberPanel",
@@ -1646,7 +1646,7 @@
                           "stepInterval": 60,
                           "disabled": true,
                           "filter": {
-                            "expression": "service.name = 'casper-assistant' AND deployment.environment.name = $environment AND gen_ai.operation.name = 'execute_tool' AND casper.in_agent_run = true"
+                            "expression": "service.name = 'casper-assistant' AND deployment.environment.name = $environment AND casper.in_agent_run = true"
                           },
                           "having": {
                             "expression": ""
@@ -1700,7 +1700,7 @@
         "spec": {
           "display": {
             "name": "Pipeline drop-off over time",
-            "description": "Distinct agent runs reaching each phase over time — runs (invoke_agent), reached-tool (execute_tool, any tool), reached-generation (our deduped chat span). Matched on the stable OTel gen_ai.operation.name attribute, not on span display names, so renames don't break it. The gap between the lines is where runs drop off."
+            "description": "Distinct agent runs reaching each phase over time — runs (casper.in_agent_run), reached-tool (execute_tool, any tool), reached-generation (our deduped chat span). Phases are matched on stable attributes, not on span display names, so renames don't break it. Both phase lines sit under the runs line by construction. The gap between runs and reached-tool is the share of turns the agent answered directly."
           },
           "plugin": {
             "kind": "signoz/TimeSeriesPanel",
@@ -1722,7 +1722,7 @@
                           "stepInterval": 60,
                           "disabled": false,
                           "filter": {
-                            "expression": "service.name = 'casper-assistant' AND deployment.environment.name = $environment AND gen_ai.operation.name = 'invoke_agent'"
+                            "expression": "service.name = 'casper-assistant' AND deployment.environment.name = $environment AND casper.in_agent_run = true"
                           },
                           "groupBy": [],
                           "legend": "runs",
