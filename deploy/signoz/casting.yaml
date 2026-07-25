@@ -9,3 +9,28 @@ spec:
   mcp:
     spec:
       enabled: true
+  signoz:
+    spec:
+      env:
+        # The versioned dashboard uses the v2 (Perses) schema (schemaVersion: v6),
+        # and on current SigNoz builds the v2 renderer sits behind a default-off
+        # feature flag. Without it the UI silently falls back to the legacy
+        # renderer and shows an empty "Welcome to your new dashboard" even though
+        # all 30 panels exist in the API. `__` is a literal underscore in the flag
+        # name (flagger.config.boolean.use_dashboard_v2); single `_` separates
+        # config levels.
+        SIGNOZ_FLAGGER_CONFIG_BOOLEAN_USE__DASHBOARD__V2: "true"
+  # Platform-domain tweaks Foundry does not model. Applied to the generated
+  # compose file as RFC-6902 operations.
+  patches:
+    - target: "deployment/compose.yaml"
+      operations:
+        # Foundry publishes the UI on the host as 8080:8080. That port is taken
+        # by another stack on this machine, so the UI is remapped to 8090.
+        # `add` (not `replace`) so the patch also holds if the generator ever
+        # stops emitting a default `ports` key. Container port is unchanged, so
+        # in-network addressing (http://signoz-signoz-0:8080) still works.
+        - op: add
+          path: /services/signoz-signoz-0/ports
+          value:
+            - "8090:8080"
