@@ -36,7 +36,7 @@ overrides:
   "lodash@<4.17.24": ">=4.17.24"
   "undici@<6.27.0": ">=6.27.0"
   "esbuild@<0.24.3": ">=0.24.3"
-  "postcss@<8.5.10": ">=8.5.10"
+  "postcss@<8.5.18": ">=8.5.18"
   # DoS / resource-consumption (transitivas, sem patch upstream ainda):
   # js-yaml: UM só override por pacote no pnpm — consolidado. `<4.3.0 → 4.3.0`
   # cobre tanto o antigo <3.15.0 (força gray-matter 3.x→4.x, já funcionava)
@@ -52,7 +52,7 @@ overrides:
   # CVEs high adicionais (jul 2026) — todas transitivas, patch DENTRO do mesmo
   # major (alvo caret p/ não pular major e quebrar o pai). brace-expansion tem 3
   # linhas instaladas (1.x/2.x/5.x), cada uma com seu ReDoS fix.
-  #   brace-expansion  ReDoS (HIGH)              → 1.1.16 / 2.1.2 / 5.0.7
+  #   brace-expansion  ReDoS (HIGH)              → 1.1.16 / 2.1.2 / 5.0.8
   #   js-yaml 4.x      special-chars ReDoS (HIGH)→ 4.3.0
   #   shell-quote      arg injection (HIGH)      → 1.8.5
   #   fast-uri         host confusion IDN (HIGH) → 3.1.4  (fica em 3.x p/ ajv)
@@ -61,9 +61,37 @@ overrides:
   #   @opentelemetry/propagator-jaeger (HIGH)    → 2.9.0
   "brace-expansion@<1.1.16": "^1.1.16"
   "brace-expansion@>=2.0.0 <2.1.2": "^2.1.2"
-  "brace-expansion@>=5.0.0 <5.0.7": "^5.0.7"
+  # 5.0.7 era o alvo do ReDoS anterior; GHSA-mh99-v99m-4gvg move o fix p/ 5.0.8.
+  "brace-expansion@>=5.0.0 <5.0.8": "^5.0.8"
   "shell-quote@<1.8.5": "^1.8.5"
   "fast-uri@<3.1.4": "^3.1.4"
   "sharp@<0.35.0": "^0.35.0"
   "fast-xml-parser@>=5.9.3 <5.10.1": "^5.10.1"
   "@opentelemetry/propagator-jaeger@<2.9.0": "^2.9.0"
+
+# Advisories aceitas conscientemente. Cada entrada precisa de justificativa e de
+# uma condição de saída — não é lugar para silenciar ruído.
+auditConfig:
+  ignoreGhsas:
+    # GHSA-mh99-v99m-4gvg — brace-expansion, DoS por expansão sem limite (HIGH).
+    #
+    # O advisory declara UM range só: `<=5.0.7`, corrigido em 5.0.8. Por semver
+    # isso engloba também as linhas 1.x e 2.x, que NÃO têm release corrigido —
+    # a única versão que satisfaz `>=5.0.8` é da linha 5.x. O override acima já
+    # mantém toda instância 5.x em 5.0.8; o que sobra são cópias 1.1.16/2.1.2
+    # presas sob `minimatch`, em cadeias transitivas profundas
+    # (inngest → @opentelemetry/auto-instrumentations-node → gcp-metadata →
+    # gaxios → rimraf → glob → minimatch, e mastra → serve → serve-handler →
+    # minimatch).
+    #
+    # Forçar essas para 5.0.8 QUEBRA em runtime, verificado: o CJS da 5.x
+    # exporta um objeto (`{ EXPANSION_MAX, EXPANSION_MAX_LENGTH, expand }`),
+    # enquanto minimatch 3.x faz `const expand = require("brace-expansion")` e
+    # chama `expand(...)` — viraria "expand is not a function". Trocar um DoS
+    # por um crash certo é piorar.
+    #
+    # Exposição real: nenhuma dessas cadeias recebe glob de origem não confiável
+    # — são globs internos de resolução de arquivo (rimraf, serve-handler).
+    # Sair daqui quando minimatch publicar uma linha que dependa de 5.x, ou
+    # quando o advisory ganhar ranges por major.
+    - GHSA-mh99-v99m-4gvg
