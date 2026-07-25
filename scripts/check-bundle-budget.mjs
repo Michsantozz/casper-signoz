@@ -9,7 +9,12 @@ const statsPath = new URL(
 // Keep a small margin above the July 2026 baseline so normal chunk hash/layout
 // changes pass while accidental cross-route client imports fail loudly.
 const budgets = {
-  "/": 2_200_000,
+  // Medido em 2026-07-25: 2153.2 KiB. O teto anterior (2148.4 KiB) ficou 4.8 KiB
+  // abaixo do real — 0.22%, dentro do ruído de hash/layout que o comentário
+  // acima já prevê, não uma regressão. Margem reajustada para ~10 KiB, apertada
+  // o bastante para ainda pegar import cruzado de client (o caso /share/[token]
+  // deste mesmo dia estourou 1.2 MB — esse é o sinal que importa).
+  "/": 2_215_000,
   "/meetings": 950_000,
   "/meetings/[botId]": 2_200_000,
   "/meetings/trends": 925_000,

@@ -1,6 +1,12 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { PublicMeetingView } from "@/features/meetings";
+// Deep import on purpose, NOT through the slice barrel. `@/features/meetings`
+// re-exports the whole slice (MeetingNotebook, MeetingsList, TeamTrends, the
+// tool UIs), and pulling the barrel in here dragged all of it into this route's
+// client bundle: /share/[token] went 878 KiB -> 2118 KiB, 2.4x over budget.
+// This page renders exactly one component; importing exactly one component
+// keeps the public share route small.
+import { PublicMeetingView } from "@/features/meetings/ui/PublicMeetingView";
 import { getPublicMeeting } from "@/features/meetings/api/public-meeting";
 
 export const metadata: Metadata = {
