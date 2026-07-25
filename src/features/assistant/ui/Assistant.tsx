@@ -17,10 +17,12 @@ import { GoogleCalendarIcon } from "@/shared/ui/google-calendar-icon";
 import { Thread } from "@/shared/ui/assistant-ui/thread";
 import { ThreadList } from "@/shared/ui/assistant-ui/thread-list";
 import { cn } from "@/shared/lib/utils";
-import { MeetingToolUIs } from "@/features/meetings/ui/MeetingToolUI";
-import { PickDateTool } from "@/features/meetings/ui/PickDateToolUI";
-import { ConnectCalendarTool } from "@/features/meetings/ui/CalendarConnectToolUI";
-import { SendSummaryEmailTool } from "@/features/meetings/ui/SendSummaryEmailToolUI";
+import {
+  MeetingToolUIs,
+  PickDateTool,
+  ConnectCalendarTool,
+  SendSummaryEmailTool,
+} from "@/features/meetings";
 import { createThreadListAdapter } from "@/features/assistant/model/thread-list-adapter";
 import { createUploadAttachmentAdapter } from "@/features/assistant/model/attachment-adapter";
 import { createFeedbackAdapter } from "@/features/assistant/model/feedback-adapter";

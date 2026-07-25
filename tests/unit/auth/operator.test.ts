@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { isOperator } from "@/shared/lib/operator";
+import { isOperator } from "@/server/operator";
 
 const ORIGINAL_ENV = { ...process.env };
 

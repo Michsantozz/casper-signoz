@@ -12,21 +12,34 @@ const eslintConfig = [
     files: ["src/**/*.{ts,tsx}"],
     plugins: { boundaries },
     settings: {
+      // Sem resolver, o plugin não resolve o alias `@/` (tsconfig paths) e todo
+      // import com alias vira alvo "unknown" — que a regra `dependencies`
+      // IGNORA. Como o projeto exige alias em tudo, as policies ficavam
+      // inertes. O resolver typescript lê os paths do tsconfig e devolve o
+      // arquivo real, reativando a fiscalização.
+      "import/resolver": {
+        typescript: { project: "./tsconfig.json" },
+      },
       "boundaries/include": ["src/**/*"],
+      // Os patterns casam contra PASTAS (folder mode). `src/X/**/*` não casa a
+      // pasta raiz da camada, então arquivos top-level (mastra/index.ts,
+      // inngest/client.ts, features/X/index.ts — os barrels!) ficavam sem
+      // classificação e escapavam das policies. Cada camada lista também o
+      // pattern da própria raiz.
       "boundaries/elements": [
-        { type: "app", pattern: "src/app/**/*" },
+        { type: "app", pattern: ["src/app/**/*", "src/app"] },
         // Camadas FSD-Next: a pasta `app/` do Next é só roteamento (shells finas
         // que re-exportam). A lógica real das páginas mora em `_pages/` e a das
         // route handlers em `_app/api-routes/`. Prefixo `_` evita colisão com as
         // pastas reservadas do Next (app/pages) — convenção oficial do FSD.
         { type: "next-page", pattern: "src/_pages/**/*", capture: ["slice"] },
-        { type: "next-api", pattern: "src/_app/**/*" },
-        { type: "mastra", pattern: "src/mastra/**/*" },
-        { type: "server", pattern: "src/server/**/*" },
+        { type: "next-api", pattern: ["src/_app/**/*", "src/_app"] },
+        { type: "mastra", pattern: ["src/mastra/**/*", "src/mastra"] },
+        { type: "server", pattern: ["src/server/**/*", "src/server"] },
         // Infra: cliente Inngest + builders de workflow cron-aware. Camada folha
         // (só depende de libs externas). Consumida por mastra/workflows e pela
         // route handler do inngest (_app/api-routes/inngest).
-        { type: "infra", pattern: "src/inngest/**/*" },
+        { type: "infra", pattern: ["src/inngest/**/*", "src/inngest"] },
         // O `api/` de um slice são as Server Actions ("use server"): a PONTE
         // que a UI cliente chama para mutar. É a única parte do slice que pode
         // tocar server/*. Declarado ANTES de "feature" (first-match ganha) e com
@@ -39,9 +52,14 @@ const eslintConfig = [
           partialMatch: false,
           capture: ["family"],
         },
-        // captura o nome do slice (multisig, wallet, ...) em "family"
-        { type: "feature", pattern: "src/features/*/**/*", capture: ["family"] },
-        { type: "shared", pattern: "src/shared/**/*" },
+        // captura o nome do slice (multisig, wallet, ...) em "family";
+        // "src/features/*" classifica o barrel (features/X/index.ts).
+        {
+          type: "feature",
+          pattern: ["src/features/*/**/*", "src/features/*"],
+          capture: ["family"],
+        },
+        { type: "shared", pattern: ["src/shared/**/*", "src/shared"] },
       ],
     },
     rules: {

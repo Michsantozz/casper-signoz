@@ -3,7 +3,7 @@ import {
   selectCapturePoints,
   inAnySpan,
   type Span,
-} from "@/shared/lib/screen-capture-points";
+} from "@/features/meetings/model/screen-capture-points";
 
 /**
  * selectCapturePoints — decides WHICH seconds to grab a screen frame from. Pure.

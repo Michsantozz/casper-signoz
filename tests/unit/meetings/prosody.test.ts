@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { scoreTension, type ProsodyWindow } from "@/shared/lib/prosody";
+import { scoreTension, type ProsodyWindow } from "@/features/meetings/model/prosody";
 
 /**
  * scoreTension — fuses the acoustic energy envelope with the timing moments to

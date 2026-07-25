@@ -4,7 +4,7 @@ import {
   renameThread,
   setArchived,
   deleteThread,
-} from "@/features/assistant/model/threads";
+} from "@/mastra/threads";
 
 type Ctx = { params: Promise<{ id: string }> };
 

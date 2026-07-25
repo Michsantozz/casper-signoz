@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/features/auth/model/session";
-import { isOperator } from "@/shared/lib/operator";
+import { isOperator } from "@/server/operator";
 
 /**
  * Manual trigger for the autonomous agent-health watch.

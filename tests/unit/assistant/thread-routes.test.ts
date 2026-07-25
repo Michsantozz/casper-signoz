@@ -18,7 +18,7 @@ const generateThreadTitle = vi.fn();
 vi.mock("@/features/auth/model/session", () => ({
   getSession: (...a: unknown[]) => getSession(...a),
 }));
-vi.mock("@/features/assistant/model/threads", () => ({
+vi.mock("@/mastra/threads", () => ({
   listThreads: (...a: unknown[]) => listThreads(...a),
   createThread: (...a: unknown[]) => createThread(...a),
   renameThread: (...a: unknown[]) => renameThread(...a),

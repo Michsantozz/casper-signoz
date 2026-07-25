@@ -3,7 +3,7 @@ import { createUIMessageStreamResponse, jsonSchema, stepCountIs, tool } from "ai
 import type { JSONSchema7 } from "ai";
 import { NextResponse, after } from "next/server";
 import { getSession } from "@/features/auth/model/session";
-import { isOperator } from "@/shared/lib/operator";
+import { isOperator } from "@/server/operator";
 import { isBotOwner } from "@/server/recall/ownership";
 import { checkRateLimit, rateLimitedResponse } from "@/shared/lib/rate-limit";
 import { assertBodyWithinLimit } from "@/shared/lib/http";

@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Client-side TENSION analysis for the notebook. Wraps shared/lib/prosody: on
+ * Client-side TENSION analysis for the notebook. Wraps features/meetings/model/prosody: on
  * demand, it decodes the meeting audio (mediabunny/WebCodecs), builds the energy
  * envelope, and scores each timing moment — telling apart real tension (a loud,
  * agitated overlap) from a casual backchannel (a quiet, flat one).
@@ -20,7 +20,7 @@
  */
 
 import { useCallback, useRef, useState } from "react";
-import { analyzeProsody, scoreTension } from "@/shared/lib/prosody";
+import { analyzeProsody, scoreTension } from "./prosody";
 import { analyzeMeetingBehavior } from "@/features/meetings/api/actions";
 import type {
   MeetingDynamics,

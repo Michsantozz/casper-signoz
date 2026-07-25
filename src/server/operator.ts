@@ -1,3 +1,5 @@
+import "server-only";
+
 /**
  * Explicit operator allowlist for workspace-wide operational capabilities.
  *

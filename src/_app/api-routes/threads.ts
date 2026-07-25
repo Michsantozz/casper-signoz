@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/features/auth/model/session";
-import { listThreads, createThread } from "@/features/assistant/model/threads";
+import { listThreads, createThread } from "@/mastra/threads";
 
 /**
  * Chat threads for the authenticated user — powers the ThreadList sidebar.

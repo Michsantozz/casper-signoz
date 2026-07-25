@@ -53,7 +53,7 @@ vi.mock("@mastra/ai-sdk/ui", () => ({
 
 // Imported after the mocks are registered.
 const { createThread, generateThreadTitle, listThreads } = await import(
-  "@/features/assistant/model/threads"
+  "@/mastra/threads"
 );
 
 const textMsg = (role: string, text: string) => ({

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/features/auth/model/session";
-import { generateThreadTitle } from "@/features/assistant/model/threads";
+import { generateThreadTitle } from "@/mastra/threads";
 
 type Ctx = { params: Promise<{ id: string }> };
 

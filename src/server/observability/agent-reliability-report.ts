@@ -2,7 +2,7 @@ import "server-only";
 import { db } from "@/shared/db";
 import { user } from "@/shared/db/auth-schema";
 import { createNotificationsForUsers } from "@/server/notifications";
-import { isOperator } from "@/shared/lib/operator";
+import { isOperator } from "@/server/operator";
 
 /**
  * Autonomous weekly reliability report — the fleet-health digest, no human in it.

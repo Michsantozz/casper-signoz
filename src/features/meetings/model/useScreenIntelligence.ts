@@ -18,7 +18,7 @@ import {
   selectCapturePoints,
   type Span,
   type TimedUtterance,
-} from "@/shared/lib/screen-capture-points";
+} from "./screen-capture-points";
 import { extractFrames } from "@/shared/lib/frames";
 import { analyzeMeetingScreens } from "@/features/meetings/api/actions";
 import type { ScreenInsight } from "@/features/meetings/model/queries";
