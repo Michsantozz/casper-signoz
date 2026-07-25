@@ -5,7 +5,7 @@ OTLP traces the app already exports (see [`../../../SIGNOZ.md`](../../../SIGNOZ.
 
 ## `agent-llm-observability.json`
 
-Agent-native observability across **traces, metrics and logs** — 29 panels.
+Agent-native observability across **traces, metrics and logs** — 30 panels.
 
 > **One control before anything else: the `Environment` variable** at the top of
 > the dashboard. Every traces panel is scoped to
@@ -27,15 +27,16 @@ Panels:
 | LLM latency p50/p95/p99 | duration percentiles over time |
 | Calls by tool | `count()` grouped by `gen_ai.tool.name` |
 | Errors by type | `count()` grouped by `error.type` |
-| Answer quality (avg completeness) | avg over answer-quality spans |
-| Answer quality over time | avg completeness time series |
+| Answer coverage (avg) | `avg(mastra.eval.score)` — lexical COVERAGE of the request, not correctness (see note below) |
+| Answer coverage over time | coverage time series — read the shape, not the level |
 | **Token rate (metric) by type** | `rate` of `gen_ai.client.token.usage` counter, grouped by `gen_ai.token.type` — `signal: metrics` |
 | **LLM cost (metric) by model** | `increase` of `gen_ai.client.operation.cost` counter (real USD), grouped by model — `signal: metrics` |
 | **Operation p95 latency (metric histogram)** | `p95` of `gen_ai.client.operation.duration` histogram, grouped by `gen_ai.operation.name` — `signal: metrics` |
 | RAG retrieval p95 latency | `p95(duration_nano)` where `mastra.span.type = 'retrieval'`, grouped by `db.collection.name` |
 | RAG top similarity score | `avg(gen_ai.retrieval.top_score)` grouped by collection |
 | Empty retrievals | `count()` where `gen_ai.retrieval.returned_count = 0` |
-| Health-watch failures | `count()` where `mastra.span.type = 'health_watch'` |
+| Health-watch failures | `count()` where `mastra.span.type = 'health_watch' AND mastra.health_watch.ok = false` |
+| Health-watch heartbeats | `count()` where `...ok = true` — proof of life; **zero is the alarming reading** |
 | **Model failovers** | `count()` where `mastra.span.type = 'model_failover'` |
 | **Failovers by target & trigger** | `count()` grouped by `model.failover.to` + `model.failover.source` |
 | **Error logs over time by operation** | `count()` of ERROR log records grouped by `gen_ai.operation.name` — `signal: logs` |
@@ -93,9 +94,31 @@ telemetry was produced and thrown away. These four close that gap.
 Retrieval is worth its own panels because it runs on *every* agent turn, ahead
 of the model call: when it slows down the whole turn slows down, and when
 `top_score` drifts down the agent is grounding its answers on progressively
-worse context — a leading indicator of the quality regression that
-`answer-quality-low` only catches after the fact. `Health-watch failures` is the
-watchdog's own vital sign (paired with `../alerts/health-watch-down.json`).
+worse context — a leading indicator of the coverage regression that
+`answer-quality-low` only catches after the fact.
+
+The two health-watch panels are the watchdog's own vital signs, and they are a
+PAIR on purpose. `Health-watch failures` (`ok = false`) counts passes that ran
+and broke; `Health-watch heartbeats` (`ok = true`) counts passes that ran and
+succeeded. The failures panel alone was ambiguous in the worst direction: a
+watchdog that stopped running emits nothing, so it renders the same calm zero as
+a perfectly healthy hour. Reading them together disambiguates — zero failures
+AND zero heartbeats means the loop is dead, not well. That state pages via
+[`../alerts/health-watch-absent.json`](../alerts/README.md) (SigNoz
+`alertOnAbsent`), and the `ok = false` filter on the failures panel is required
+now that heartbeats share the same span type.
+
+### Answer coverage is not answer quality
+
+The two coverage panels read `mastra.eval.score`, produced by `@mastra/evals`'
+`completeness` scorer: `covered_elements / total_input_elements` over elements
+extracted from the REQUEST. It measures how much of the question the answer
+engaged with — not whether the answer was right. A reply that echoes the
+prompt's vocabulary scores high; a correct terse reply can score low. Read both
+panels as DROP detectors against this service's own baseline (truncation cap,
+degraded retrieval, prompt/model regression), never as a grade. Correctness
+would need an LLM judge scorer — deliberately out of scope, since it would put a
+paid model call on every turn. See `../../../src/mastra/agent-quality.ts`.
 
 ### The failover panels — SigNoz as a runtime input
 

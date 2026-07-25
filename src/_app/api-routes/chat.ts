@@ -197,7 +197,7 @@ export async function POST(req: Request) {
 
   // Open the per-turn trace holder BEFORE the stream is built, so the LLM spans
   // emitted while the agent runs register this turn's trace ref, and the after()
-  // answer-quality scorer can join the SAME trace (its own context is long gone
+  // answer-coverage scorer can join the SAME trace (its own context is long gone
   // by then). enterWith-based → covers the stream, the agent generator, and the
   // detached drain without wrapping the whole body. See mastra/llm-telemetry.ts.
   beginTurnTrace();
@@ -266,7 +266,7 @@ export async function POST(req: Request) {
   // Drain via getReader() (spec base, no reliance on Symbol.asyncIterator which
   // isn't guaranteed on every runtime's ReadableStream). We don't need the
   // chunks to display — but we DO accumulate the assistant's text so we can
-  // score answer quality once the turn completes (the pull also keeps the agent
+  // score answer coverage once the turn completes (the pull also keeps the agent
   // loop and its per-step saves progressing to the end).
   const drain = async () => {
     const reader = serverBranch.getReader();

@@ -1,0 +1,82 @@
+{
+  "alert": "CasperAgent — Autonomous health-watch went silent",
+  "alertType": "TRACES_BASED_ALERT",
+  "ruleType": "threshold_rule",
+  "schemaVersion": "v2alpha1",
+  "description": "No health_watch span of ANY kind — success or failure — reached SigNoz for the absence window. This is the one failure every other rule in this pack is structurally blind to. Each of them fires on telemetry the agent PRODUCES, so when the agent stops producing telemetry they all go quiet, and quiet is indistinguishable from healthy. Its twin `health-watch-down.json` has the same blind spot by construction: it matches `mastra.health_watch.ok = false`, which requires the watch to still be running well enough to report its own failure. THIS rule inverts that — it fires on the ABSENCE of the heartbeat the watch emits on every clean pass (see emitWatchSpan in src/server/observability/agent-health-watch.ts). Causes to check, in order: the Inngest cron stopped firing, the workflow is no longer registered, a hung pass is holding the concurrency:1 slot (each pass is capped at 5 min), the app is down, or the OTLP export path broke. NOTE ON THE MECHANISM: `condition.alertOnAbsent` + `condition.absentFor` are undocumented in the public SigNoz docs at time of writing — they were verified empirically against this deployment (v0.134.0) via POST /api/v2/rules/test: with no matching data the identical rule returns alertCount 0 WITHOUT the flag and alertCount 1 WITH it. CALIBRATION IS LOAD-BEARING AND WAS MEASURED, NOT GUESSED. `alertOnAbsent` evaluates absence PER BUCKET, so the bucket must be wide enough that a healthy watch always lands one tick inside it. The watch runs on a */15 cron; at stepInterval 900 or 1800 the rule still fired with a live heartbeat present (measured: alertCount 1). `stepInterval` 3600 against `evalWindow` 1h collapses the window to a single bucket and is the first value that behaves. Full truth table, run against this deployment with synthetic heartbeats injected over the preceding hour: heartbeat present -> 0 | heartbeat present, filtered to ok=true -> 0 | no data at all -> 1 | no data at all WITHOUT the flag -> 0 (the blind spot this rule exists to close). `absentFor` is 2700 (SECONDS, i.e. 45 min = three missed ticks). Re-measure both if the cron cadence changes.",
+  "condition": {
+    "compositeQuery": {
+      "queries": [
+        {
+          "type": "builder_query",
+          "spec": {
+            "name": "A",
+            "signal": "traces",
+            "stepInterval": 3600,
+            "disabled": false,
+            "filter": {
+              "expression": "service.name = 'casper-assistant' AND deployment.environment.name = 'production' AND mastra.span.type = 'health_watch'"
+            },
+            "having": {
+              "expression": ""
+            },
+            "aggregations": [
+              {
+                "expression": "count()"
+              }
+            ]
+          }
+        }
+      ],
+      "panelType": "graph",
+      "queryType": "builder",
+      "unit": "none"
+    },
+    "selectedQueryName": "A",
+    "alertOnAbsent": true,
+    "absentFor": 2700,
+    "thresholds": {
+      "kind": "basic",
+      "spec": [
+        {
+          "name": "critical",
+          "target": 0,
+          "targetUnit": "",
+          "matchType": "at_least_once",
+          "op": "below",
+          "channels": [
+            "casper-default"
+          ]
+        }
+      ]
+    }
+  },
+  "labels": {
+    "severity": "critical",
+    "component": "health-watch",
+    "kind": "absence"
+  },
+  "annotations": {
+    "summary": "Autonomous health-watch produced no heartbeat for {{$threshold}}+ minutes",
+    "description": "No health_watch span (ok=true or ok=false) reached SigNoz in the absence window. The self-observing loop is not running — the silence of every other CasperAgent alert can no longer be read as health."
+  },
+  "evaluation": {
+    "kind": "rolling",
+    "spec": {
+      "evalWindow": "1h",
+      "frequency": "5m"
+    }
+  },
+  "notificationSettings": {
+    "groupBy": [],
+    "renotify": {
+      "enabled": true,
+      "interval": "2h",
+      "alertStates": [
+        "firing"
+      ]
+    },
+    "usePolicy": false
+  },
+  "disabled": false
+}

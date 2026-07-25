@@ -783,7 +783,7 @@ const TRACE_ID_RE = /^[0-9a-f]{32}$/;
 // A trace ref (traceId + a spanId in it) we can forge an OTel parent from.
 type TraceLink = { traceId: string; spanId: string };
 
-// Per-turn holder for the turn's trace ref. The answer-quality span is scored in
+// Per-turn holder for the turn's trace ref. The answer-coverage span is scored in
 // Next's after() — LONG after the agent span (and Mastra's getCurrentSpan ALS)
 // are gone — so it can't parent itself the way LLM/tool spans do inline. We
 // stash the turn's trace ref HERE while the agent is live, then the after()
@@ -873,7 +873,7 @@ export function inMastraAgentRun(): boolean {
 export function mastraParentContext(): Context {
   const ref = mastraSpanRef();
   if (ref) {
-    // Register the FIRST valid ref this turn so the after() answer-quality
+    // Register the FIRST valid ref this turn so the after() answer-coverage
     // scorer can join this trace. First = closest to the agent_run root.
     const store = turnTraceStore.getStore();
     if (store && !store.link) store.link = ref;

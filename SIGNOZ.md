@@ -1,5 +1,34 @@
 # SigNoz Observability
 
+> ### ⚠️ Read this before anything else — two ways to see an empty dashboard
+>
+> Both are silent. Neither reports an error. Together they are the only real
+> setup hazard in this guide.
+>
+> **1. The v2 dashboard renderer is behind a default-off flag.** The versioned
+> dashboard uses the v2 (Perses) schema (`schemaVersion: v6`). On current builds
+> the UI silently falls back to the legacy renderer and shows *"Welcome to your
+> new dashboard"* even though all 30 panels exist in the API. Set it on the
+> SigNoz service and recreate the container:
+>
+> ```yaml
+> # pours/deployment/compose.yaml, service signoz-signoz-0, under environment:
+> - SIGNOZ_FLAGGER_CONFIG_BOOLEAN_USE__DASHBOARD__V2=true
+> ```
+>
+> ```bash
+> docker compose up -d signoz-signoz-0
+> ```
+>
+> **2. The dashboard opens scoped to `production`.** The `Environment` box at the
+> top defaults to `production`, and a `pnpm dev` run stamps `development` — so
+> every panel renders a correct, honest **zero**. Type your environment into the
+> box, or export `DEPLOYMENT_ENVIRONMENT=production` when you drive the app.
+>
+> Details on both: [the flag](#-enable-the-v2-dashboard-renderer-required) ·
+> [the variable](#set-the-environment-variable-first).
+
+
 OpenTelemetry-native observability for the CasperAgent agent stack (Mastra +
 Vercel AI SDK + Claude Agent SDK), across all **three OTLP signals — traces,
 metrics, and logs**. Agent spans — tool calls, LLM generations, RAG hops, Inngest
@@ -91,18 +120,34 @@ env-var convention; single `_` separates config levels.)
 ## Import the dashboard + alerts
 
 Everything is versioned as code and pushed over the REST API with a
-service-account key (`SIGNOZ-API-KEY` header).
+service-account key (`SIGNOZ-API-KEY` header). **One command applies all of it:**
 
 1. **Create a service account key** (once, as an admin) — SigNoz UI →
    *Settings → Service Accounts* → create account (editor role) → create key.
    Or via API: `POST /api/v1/service_accounts` → `POST /api/v1/service_accounts/{id}/keys`.
-2. **Push the dashboard** — `POST /api/v2/dashboards` with the versioned JSON
-   ([`deploy/signoz/dashboards/agent-llm-observability.json`](deploy/signoz/dashboards/agent-llm-observability.json)).
-   The body is `{ schemaVersion, name (RFC-1123 slug), tags:[{key,value}], spec }`
-   — the JSON's `spec` (display, variables, panels, layouts) is used as-is.
-3. **Push the alert rules** — `POST /api/v2/rules` per file under
-   [`deploy/signoz/alerts/`](deploy/signoz/alerts/); `POST /api/v2/rules/test`
-   dry-runs one before saving.
+2. **Apply everything:**
+
+   ```bash
+   SIGNOZ_INSTANCE_URL=http://localhost:8090 \
+   SIGNOZ_MCP_API_KEY=<service-account-key> \
+   pnpm signoz:import              # add --dry-run to validate without writing
+   ```
+
+   It pushes the notification **channel** first (the rules reference it by name
+   and SigNoz will not create it for them), then the **dashboard**, then every
+   **alert rule**. Idempotent by name — absent → created, present → updated, so
+   re-running converges instead of piling up duplicates. `--dry-run` runs each
+   rule through `POST /api/v2/rules/test`, so a malformed query is caught before
+   anything is written; `--only=channels|dashboards|alerts` narrows the run.
+   Exits non-zero on any failure. Source: [`scripts/signoz-import.ts`](scripts/signoz-import.ts).
+
+The endpoints it drives, if you'd rather do it by hand: `POST /api/v1/channels`,
+`POST /api/v2/dashboards` (body `{ schemaVersion, name (RFC-1123 slug),
+tags:[{key,value}], spec }` — the JSON's `spec` is used as-is), and
+`POST /api/v2/rules` per file under [`deploy/signoz/alerts/`](deploy/signoz/alerts/).
+Trace funnels stay manual on purpose — their steps match by exact `span_name`, so
+importing one blind produces a funnel that never matches
+([why](deploy/signoz/funnels/README.md)).
 
 Panels populate once `gen_ai.*` traces are ingested (drive the agent first).
 

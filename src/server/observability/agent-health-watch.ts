@@ -57,13 +57,30 @@ class WatchTimeoutError extends Error {
   }
 }
 
-// A failed watch is itself a signal: emit it as a span so "the watchdog stopped
-// working" is queryable/alertable in SigNoz instead of only being visible as an
-// absence of data. mastra.span.type = "health_watch" is the discriminator.
-// Lazy import (mastra pulls in server modules — same cycle-avoidance as below).
-async function emitWatchFailureSpan(args: {
-  error: unknown;
+// Every pass emits a span — SUCCESS included. That "included" is the whole point.
+//
+// The failure span alone makes the watchdog alertable only while it is still
+// running well enough to report its own failure. The one state it could never
+// signal is the one that matters most: the cron stops firing at all (Inngest
+// down, the workflow unregistered, a hung pass holding the concurrency:1 slot).
+// Then no health_watch span is produced, every rule that reads them goes quiet,
+// and the absence reads exactly like health. Verified against the live instance:
+// `mastra.span.type = 'health_watch'` returned ZERO rows over 24h — the watchdog
+// had no vital sign at all, in either direction.
+//
+// So this emits a HEARTBEAT on the success path too, and
+// `../../../deploy/signoz/alerts/health-watch-absent.json` alerts on its ABSENCE
+// (SigNoz `alertOnAbsent`). Two rules now cover the two distinct failures:
+//   - health-watch-down.json   → it ran and FAILED   (ok = false)
+//   - health-watch-absent.json → it did not run AT ALL (no span)
+//
+// mastra.span.type = "health_watch" is the discriminator; mastra.health_watch.ok
+// separates the two. Lazy import (mastra pulls in server modules — same
+// cycle-avoidance as below).
+async function emitWatchSpan(args: {
+  ok: boolean;
   durationMs: number;
+  error?: unknown;
 }) {
   const { getSignozTracer } = await import("@/mastra/llm-telemetry");
   const tracer = getSignozTracer();
@@ -75,12 +92,14 @@ async function emitWatchFailureSpan(args: {
     startTime: new Date(Date.now() - args.durationMs),
   });
   span.setAttribute("mastra.span.type", "health_watch");
-  span.setAttribute("mastra.health_watch.ok", false);
-  span.setAttribute(
-    "error.type",
-    args.error instanceof Error ? args.error.name : "unknown",
-  );
-  span.setStatus({ code: SpanStatusCode.ERROR });
+  span.setAttribute("mastra.health_watch.ok", args.ok);
+  if (!args.ok) {
+    span.setAttribute(
+      "error.type",
+      args.error instanceof Error ? args.error.name : "unknown",
+    );
+    span.setStatus({ code: SpanStatusCode.ERROR });
+  }
   span.end();
 }
 
@@ -152,8 +171,21 @@ export async function runAgentHealthWatch(opts?: {
     const reason =
       error instanceof Error ? `${error.name}: ${error.message}` : "unknown";
     summary = `Health check FAILED to run (${reason}). The agent-health watch could not query telemetry this cycle.`;
-    await emitWatchFailureSpan({
+    await emitWatchSpan({
+      ok: false,
       error,
+      durationMs: Date.now() - started,
+    }).catch(() => {
+      /* observability of the observer is best-effort */
+    });
+  }
+
+  // Heartbeat on the success path. Emitted unconditionally on a clean pass so
+  // the absence rule has a signal to miss — a watchdog that only speaks when it
+  // is broken cannot report that it stopped speaking.
+  if (!failed) {
+    await emitWatchSpan({
+      ok: true,
       durationMs: Date.now() - started,
     }).catch(() => {
       /* observability of the observer is best-effort */

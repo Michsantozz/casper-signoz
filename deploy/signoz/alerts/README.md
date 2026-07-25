@@ -22,9 +22,10 @@ from the alert you jump to the exact span in the waterfall.
 | `llm-cost-spike-metric.json` | **metric** | `increase` of `gen_ai.client.operation.cost` counter (real USD) > $5 in the window | — |
 | `tool-call-failures.json` | traces | `count()` of `tool_call` spans with `error.type` > 5 in the window | `gen_ai.tool.name` |
 | `llm-error-logs.json` | **logs** | `count()` of correlated ERROR log records (`gen_ai.operation.name EXISTS`) > 5 in the window | `gen_ai.operation.name` |
-| `answer-quality-low.json` | traces | avg answer completeness below target | — |
+| `answer-quality-low.json` | traces | avg answer COVERAGE below target (lexical coverage of the request, not correctness) | — |
 | `model-failover.json` | traces | any `model_failover` span in the window (`count() > 0`) | `model.failover.to` |
-| `health-watch-down.json` | traces | any `health_watch` span with `mastra.health_watch.ok = false` | `error.type` |
+| `health-watch-down.json` | traces | any `health_watch` span with `mastra.health_watch.ok = false` — it ran and FAILED | `error.type` |
+| `health-watch-absent.json` | traces | **no** `health_watch` span at all for 45 min (`alertOnAbsent`) — it did not run AT ALL | — |
 
 Most use a 5m rolling window, 1m frequency, `matchType: at_least_once`, and
 `renotify` on the `firing` state. Adjust `target`, `evalWindow`, `frequency`,
@@ -44,16 +45,42 @@ schedule. Every other rule here fires on telemetry the agent *produces*, so if
 the self-observing loop breaks they fall silent rather than firing — silence
 stops being evidence of health. Its window is 30m/5m (a `*/15` cron only gets
 ~2 chances per window) and its target is `> 0`: a single failed pass is the
-signal, since the span is only emitted on failure.
+signal.
+
+**But `health-watch-down` alone does not close that gap — `health-watch-absent`
+is the other half.** The down rule matches `mastra.health_watch.ok = false`,
+which still requires the watch to be running well enough to report its own
+failure. The state it can never signal is the cron not firing at all (Inngest
+down, workflow unregistered, a hung pass holding the `concurrency: 1` slot) —
+and that is indistinguishable from a healthy quiet window. So the watch now
+emits a **heartbeat on every clean pass** too (`ok = true`, `emitWatchSpan` in
+[`agent-health-watch.ts`](../../../src/server/observability/agent-health-watch.ts)),
+and `health-watch-absent.json` fires on the ABSENCE of it via SigNoz's
+`condition.alertOnAbsent` / `absentFor`.
+
+Two things about that rule are worth knowing before you edit it:
+
+- **`alertOnAbsent`/`absentFor` are not in the public SigNoz docs** at time of
+  writing. They were verified against this deployment (v0.134.0) with
+  `POST /api/v2/rules/test`: identical rule, no matching data → `alertCount 0`
+  **without** the flag, `alertCount 1` **with** it. That zero is precisely the
+  blind spot.
+- **`stepInterval: 3600` is load-bearing.** Absence is evaluated per bucket, so
+  the bucket must be wide enough that a healthy `*/15` watch always lands a tick
+  inside it. Measured on the live instance with heartbeats present: step `900`
+  and `1800` still fired (false positive); `3600` against a 1h `evalWindow`
+  collapses the window to one bucket and returns 0. `absentFor` is in **seconds**
+  (2700 = 45 min = three missed ticks). Re-measure both if the cron cadence
+  changes.
 
 ## Notify channel
 
 `notificationSettings.usePolicy: false` means these rules route via their own
-thresholds' `channels` rather than route policies. **All nine rules set
+thresholds' `channels` rather than route policies. **All ten rules set
 `channels: ["casper-default"]`** (`condition.thresholds.spec[0].channels`).
 
 SigNoz resolves that by NAME and does not create the channel, so importing
-these rules into a fresh instance yields nine rules pointing at nothing. Create
+these rules into a fresh instance yields ten rules pointing at nothing. Create
 it first — the definition is versioned at [`../channels/casper-default.json`](../channels/README.md),
 which also covers the admin-only permission on that route.
 
@@ -72,13 +99,25 @@ you switch models, update both constants to your provider's per-token price.
 
 ## Create
 
-Import via the SigNoz UI (Alerts → New alert → the query builder mirrors these
-specs), or POST each file to the rules API:
+One command applies the channel, the dashboard, and every rule here, in the
+order the references require:
 
 ```bash
-# needs an admin session cookie or a service-account API key
+SIGNOZ_INSTANCE_URL=http://localhost:8090 \
+SIGNOZ_MCP_API_KEY=<service-account-key> \
+pnpm signoz:import                 # --dry-run to validate without writing
+```
+
+It is idempotent by name (absent → create, present → update), and `--dry-run`
+runs every rule through `POST /api/v2/rules/test` so a bad query expression is
+caught before anything is written. `--only=alerts` restricts it to this
+directory. See [`scripts/signoz-import.ts`](../../../scripts/signoz-import.ts).
+
+The manual path still works if you prefer it — POST each file to the rules API:
+
+```bash
 curl -X POST http://localhost:8090/api/v2/rules \
   -H 'Content-Type: application/json' \
-  -H "Authorization: Bearer $SIGNOZ_API_KEY" \
+  -H "SIGNOZ-API-KEY: $SIGNOZ_API_KEY" \
   --data @llm-latency-p95.json
 ```

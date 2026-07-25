@@ -9,19 +9,35 @@ import {
 } from "@/mastra/llm-telemetry";
 
 /**
- * Agent RESPONSE-QUALITY telemetry — the third observability axis.
+ * Agent answer-COVERAGE telemetry — the third observability axis.
  *
  * Cost (gen_ai.usage.cost) and latency/errors (span duration + status) tell you
- * how much a turn cost and whether it broke. Neither tells you whether the
- * answer was any GOOD. This closes that gap: after each agent turn we run a
- * deterministic, zero-LLM quality scorer over (prompt → answer) and emit the
- * score as an OTLP span, so SigNoz can chart "agent answer quality over time"
- * and alert when it drops.
+ * how much a turn cost and whether it broke. Neither tells you anything about
+ * the ANSWER. This closes part of that gap: after each agent turn we run a
+ * deterministic, zero-LLM scorer over (prompt → answer) and emit the score as an
+ * OTLP span, so SigNoz can chart it over time and alert when it drops.
  *
- * The scorer is @mastra/evals' `completeness` (code/NLP, no judge model, no
- * tokens) — it measures how fully the answer covers the elements of the request.
- * This matches the project's "deterministic first, LLM only where needed"
- * philosophy: quality monitoring that costs nothing per turn.
+ * WHAT IT ACTUALLY MEASURES — and what it does not. The scorer is
+ * @mastra/evals' `completeness` (code/NLP, no judge model, no tokens). Per its
+ * own reference, it extracts elements from the INPUT (nouns, verbs, topics,
+ * terms), then scores:
+ *
+ *     score = covered_elements / total_input_elements
+ *
+ * with an element counted as covered on substantial (>60%) string overlap. So
+ * this is LEXICAL COVERAGE of the request — "did the answer engage with the
+ * whole question" — NOT correctness and NOT quality. Two consequences worth
+ * naming, because a panel labelled otherwise would mislead an operator:
+ *   - a reply that parrots the prompt's vocabulary scores HIGH while saying
+ *     nothing;
+ *   - a correct, terse reply ("Yes — 3 failed.") can score LOW.
+ *
+ * So the dashboard panel and the alert are named "answer coverage", and both are
+ * meant to be read as DROP DETECTORS against this service's own baseline: a step
+ * down is real signal (a truncation cap, a degraded retrieval hop, a prompt or
+ * model regression), the absolute level is not a grade. Judging correctness
+ * would need an LLM judge scorer — deliberately out of scope here, since it
+ * would put a paid model call on every turn.
  *
  * No-op when SigNoz is off (getSignozTracer() returns undefined). Best-effort:
  * a scoring failure never affects the actual response — it's pure side-effect.
@@ -30,9 +46,9 @@ import {
 // Built once — the scorer is stateless and cheap to reuse.
 const completenessScorer = createCompletenessScorer();
 
-// Emit ONE span carrying the quality score. Backdated so its timestamp lines up
+// Emit ONE span carrying the coverage score. Backdated so its timestamp lines up
 // with the turn it scored. mastra.span.type = "eval" is the discriminator the
-// quality dashboard/alert filter on.
+// coverage dashboard/alert filter on.
 function emitEvalSpan(args: {
   scorer: string;
   score: number;
@@ -42,7 +58,7 @@ function emitEvalSpan(args: {
   if (!tracer) return;
 
   // Join the turn's trace so the score lands IN the same waterfall as the LLM /
-  // tool spans it evaluates — click a slow/errored turn, see its quality score
+  // tool spans it evaluates — click a slow/errored turn, see its coverage score
   // right there. The ref was captured while the agent was live (this runs in
   // after(), when Mastra's own span context is already gone). No ref → detached
   // root, same as before.
@@ -59,14 +75,14 @@ function emitEvalSpan(args: {
   );
   span.setAttribute("mastra.span.type", "eval");
   span.setAttribute("mastra.eval.scorer", args.scorer);
-  // 0..1 quality score. One stable attribute name so the dashboard aggregates
+  // 0..1 coverage score. One stable attribute name so the dashboard aggregates
   // avg/p05 across turns and the alert fires when it drops.
   span.setAttribute("mastra.eval.score", args.score);
   span.end();
 }
 
 /**
- * Score one agent turn's answer quality and ship it to SigNoz. `promptText` is
+ * Score one agent turn's answer coverage and ship it to SigNoz. `promptText` is
  * the user's request, `answerText` the agent's final reply. Fire-and-forget;
  * callers should not await it on the response hot path.
  */

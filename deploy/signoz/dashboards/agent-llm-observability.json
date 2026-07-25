@@ -731,8 +731,8 @@
         "kind": "Panel",
         "spec": {
           "display": {
-            "name": "Answer quality (avg completeness)",
-            "description": "Deterministic completeness score of the agent's answers (0..1), zero-LLM. mastra.span.type = eval."
+            "name": "Answer coverage (avg)",
+            "description": "Deterministic COVERAGE score (0..1), zero-LLM: the fraction of the request's extracted elements (nouns/verbs/topics/terms) the answer actually addresses — @mastra/evals `completeness`, computed as covered_elements / total_input_elements. It measures whether the agent answered the WHOLE question, NOT whether the answer is correct: a reply that echoes the prompt's vocabulary scores high, a correct terse reply can score low. Read it as a drop detector (a fall means truncation, a degraded retrieval, or a prompt regression), never as a quality grade. mastra.span.type = eval."
           },
           "plugin": {
             "kind": "signoz/NumberPanel",
@@ -786,8 +786,8 @@
         "kind": "Panel",
         "spec": {
           "display": {
-            "name": "Answer quality over time",
-            "description": "avg completeness score per interval — the third axis: is the agent's answer quality drifting?"
+            "name": "Answer coverage over time",
+            "description": "avg coverage score per interval — the third axis. Watch the SHAPE, not the level: the absolute value is a lexical-coverage ratio, so the signal is a step DOWN against this service's own baseline, not the number itself."
           },
           "plugin": {
             "kind": "signoz/TimeSeriesPanel",
@@ -1210,7 +1210,7 @@
         "spec": {
           "display": {
             "name": "Health-watch failures",
-            "description": "Failed runs of the autonomous health-watch cron (mastra.span.type = health_watch). This is the watchdog's own vital sign: if the self-observing loop breaks, every other panel here goes quiet for the wrong reason."
+            "description": "FAILED runs of the autonomous health-watch cron (mastra.span.type = health_watch AND mastra.health_watch.ok = false). The ok=false filter is REQUIRED: the watch now also emits a heartbeat span on every clean pass, so counting the span type alone would report healthy ticks as failures. Pairs with ../alerts/health-watch-down.json. Note what this panel still cannot show — a watch that stopped running emits nothing and renders as a calm zero here; that absence is covered by ../alerts/health-watch-absent.json and by the heartbeat panel beside this one."
           },
           "plugin": {
             "kind": "signoz/NumberPanel",
@@ -1236,7 +1236,7 @@
                           "stepInterval": 60,
                           "disabled": false,
                           "filter": {
-                            "expression": "service.name = 'casper-assistant' AND deployment.environment.name = $environment AND mastra.span.type = 'health_watch'"
+                            "expression": "service.name = 'casper-assistant' AND deployment.environment.name = $environment AND mastra.span.type = 'health_watch' AND mastra.health_watch.ok = false"
                           },
                           "having": {
                             "expression": ""
@@ -1902,6 +1902,57 @@
             }
           ]
         }
+      },
+      "bbbbbbbb-0000-0000-0000-00000000hb01": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Health-watch heartbeats",
+            "description": "Successful passes of the autonomous health-watch (ok = true) — the watchdog's proof of life. On a */15 cron a healthy window shows ~4/hour. ZERO here is the alarming reading, not a calm one: it means the self-observing loop is not running at all, and every other alert in the pack has gone quiet for the wrong reason. That state pages via ../alerts/health-watch-absent.json (SigNoz alertOnAbsent)."
+          },
+          "plugin": {
+            "kind": "signoz/NumberPanel",
+            "spec": {
+              "visualization": {
+                "timePreference": "global_time"
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "scalar",
+              "spec": {
+                "plugin": {
+                  "kind": "signoz/CompositeQuery",
+                  "spec": {
+                    "queries": [
+                      {
+                        "type": "builder_query",
+                        "spec": {
+                          "name": "A",
+                          "signal": "traces",
+                          "stepInterval": 60,
+                          "disabled": false,
+                          "filter": {
+                            "expression": "service.name = 'casper-assistant' AND deployment.environment.name = $environment AND mastra.span.type = 'health_watch' AND mastra.health_watch.ok = true"
+                          },
+                          "having": {
+                            "expression": ""
+                          },
+                          "aggregations": [
+                            {
+                              "expression": "count()"
+                            }
+                          ]
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        }
       }
     },
     "layouts": [
@@ -2078,6 +2129,15 @@
               "height": 3,
               "content": {
                 "$ref": "#/spec/panels/dddddddd-0000-0000-0000-00000000h001"
+              }
+            },
+            {
+              "x": 6,
+              "y": 31,
+              "width": 3,
+              "height": 3,
+              "content": {
+                "$ref": "#/spec/panels/bbbbbbbb-0000-0000-0000-00000000hb01"
               }
             },
             {

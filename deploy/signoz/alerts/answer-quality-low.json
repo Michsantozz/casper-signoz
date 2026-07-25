@@ -1,9 +1,9 @@
 {
-  "alert": "CasperAgent — answer quality low",
+  "alert": "CasperAgent — answer coverage low",
   "alertType": "TRACES_BASED_ALERT",
   "ruleType": "threshold_rule",
   "schemaVersion": "v2alpha1",
-  "description": "Average answer-completeness score (mastra.span.type = 'eval', mastra.eval.score, 0..1) dropped below target. This is the QUALITY axis — the agent is answering less completely than usual (a prompt/model regression, a truncation cap, or a degraded retrieval). Deterministic, zero-LLM score, so this is cheap to watch continuously.",
+  "description": "Average answer-COVERAGE score (mastra.span.type = 'eval', mastra.eval.score, 0..1) dropped below target. The score is @mastra/evals `completeness`: covered_elements / total_input_elements over the elements extracted from the request — i.e. how much of the question the answer addressed, NOT whether it was correct. So this rule detects a DROP (truncation cap, degraded retrieval, prompt/model regression), and must not be read as 'the agent got dumber'. Deterministic and zero-LLM, so it is cheap to watch continuously. Threshold is baseline-relative: re-tune 0.4 against this service's own observed floor before trusting it.",
   "condition": {
     "compositeQuery": {
       "queries": [
@@ -54,7 +54,7 @@
     "component": "quality"
   },
   "annotations": {
-    "summary": "Agent answer quality below threshold ({{$threshold}})",
+    "summary": "Agent answer coverage below threshold ({{$threshold}})",
     "description": "avg completeness score reached {{$value}} (0..1)."
   },
   "evaluation": {

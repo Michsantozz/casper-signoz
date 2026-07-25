@@ -27,7 +27,7 @@ observability isn't just visible; it changes what the system does.
 
 **One real agent. Every signal. A self-observing loop.** CasperAgent is instrumented **OpenTelemetry-native** — no proprietary SDK, the app just speaks standard OTLP (`http/protobuf`) and SigNoz is the sink. Everything below is **versioned as code** in [`deploy/signoz/`](deploy/signoz/) and reproducible.
 
-**① Full E2E agent traces.** One trace per turn stitches the whole waterfall — `agent_run → model_generation → tool_call / retrieve → eval` — across Mastra's native spans *and* our own. Mastra's OTLP path silently drops parent spans and streaming token usage (two upstream gaps, diagnosed against the running stack); [`src/mastra/llm-telemetry.ts`](src/mastra/llm-telemetry.ts) forges the OTel parent context off Mastra's live `AISpan` so our self-instrumented LLM/tool/RAG/quality spans join the *same* trace instead of standing up detached roots. Click a slow or errored turn → see the model call, the tools, the retrieval, and the answer-quality score, all in one view.
+**① Full E2E agent traces.** One trace per turn stitches the whole waterfall — `agent_run → model_generation → tool_call / retrieve → eval` — across Mastra's native spans *and* our own. Mastra's OTLP path silently drops parent spans and streaming token usage (two upstream gaps, diagnosed against the running stack); [`src/mastra/llm-telemetry.ts`](src/mastra/llm-telemetry.ts) forges the OTel parent context off Mastra's live `AISpan` so our self-instrumented LLM/tool/RAG/coverage spans join the *same* trace instead of standing up detached roots. Click a slow or errored turn → see the model call, the tools, the retrieval, and the answer-coverage score, all in one view.
 
 **② Real `gen_ai.*` semconv — not estimates.** Every LLM span carries the OpenTelemetry GenAI conventions with the **real** provider usage: `gen_ai.request.model`, `gen_ai.usage.input_tokens` / `output_tokens`, `cache_read` / `cache_creation` tokens, `gen_ai.usage.cost` (computed from configured per-MTok prices, cache classes priced at their own rates), `gen_ai.server.ttft` (time-to-first-token, streaming), and `finish_reasons` as a real array (not a stringified `[object Object]`). Errors on both the generate **and** streaming paths emit an error span — including in-band SDK error parts that would otherwise mask as success.
 
@@ -35,11 +35,34 @@ observability isn't just visible; it changes what the system does.
 
 **④ All three signals, correlated — logs deep-link to traces.** The failure logs aren't a separate stream you grep: each ERROR log record the app emits is **stamped with the failing span's `traceId`+`spanId`** ([`emitErrorLog`](src/mastra/llm-telemetry.ts)), so in SigNoz you click a log line and land on the exact failing LLM/tool/RAG span in the trace waterfall — *click a log, get its trace*. That's the "correlate signals across your stack" goal, built in, not bolted on.
 
-**⑤ Dashboards, alerts & a trace funnel — versioned.** A **29-panel** agent/LLM dashboard ([`deploy/signoz/dashboards/`](deploy/signoz/dashboards/)) spanning **traces, metrics *and* logs** panels, **9 alert rules** ([`deploy/signoz/alerts/`](deploy/signoz/alerts/)) — trace-based, metric-based, *and* logs-based, with trace/metric twins for cost/latency so an alert still fires if the metrics pipeline drops — and a **trace funnel** ([`deploy/signoz/funnels/`](deploy/signoz/funnels/)) modeling the real product agent's `plan → tool → generate` conversion/drop-off. Reproduced end-to-end via a SigNoz **Foundry casting spec** ([`deploy/signoz/casting.yaml`](deploy/signoz/casting.yaml) + `.lock`).
+**⑤ Dashboards, alerts & a trace funnel — versioned, and applied by one command.** A **30-panel** agent/LLM dashboard ([`deploy/signoz/dashboards/`](deploy/signoz/dashboards/)) spanning **traces, metrics *and* logs** panels, **10 alert rules** ([`deploy/signoz/alerts/`](deploy/signoz/alerts/)) — trace-based, metric-based, *and* logs-based, with trace/metric twins for cost/latency so an alert still fires if the metrics pipeline drops — and a **trace funnel** ([`deploy/signoz/funnels/`](deploy/signoz/funnels/)) modeling the real product agent's `plan → tool → generate` conversion/drop-off. `pnpm signoz:import` applies the whole set (channel → dashboard → rules, in dependency order, idempotent by name, `--dry-run` validates server-side first). Reproduced end-to-end via a SigNoz **Foundry casting spec** ([`deploy/signoz/casting.yaml`](deploy/signoz/casting.yaml) + `.lock`).
 
-**⑥ The self-observation loop — the SRE Sidekick.** A dedicated **SRE-copilot agent** ([`src/mastra/agents/sre.agent.ts`](src/mastra/agents/sre.agent.ts)) answers *"how many tokens did I spend today by model?"*, *"which tool is failing the most?"*, *"did any LLM call error in the last hour?"* by querying **CasperAgent's own SigNoz telemetry over the SigNoz MCP** — and its MCP toolset is itself wrapped in telemetry, so the copilot's own reads show up in the traces. On top: an **autonomous health-watch** runs every 15 min and a **weekly reliability report** — both emit their own spans, and the health-watch is *authorized to self-provision a SigNoz alert* when it spots a regression. **The agent observes itself, reasons over what it sees, and acts on it.**
+**⑥ Two rules that watch the watcher — including the one absence nothing else can see.** Every other rule in the pack fires on telemetry the agent *produces*, so when the self-observing loop breaks they all fall silent — and silence reads exactly like health. So the health-watch emits a **heartbeat span on every clean pass**, and [`health-watch-absent.json`](deploy/signoz/alerts/health-watch-absent.json) fires on its **absence** (SigNoz `condition.alertOnAbsent`), while its twin `health-watch-down.json` covers "it ran and failed". `alertOnAbsent` isn't in the public SigNoz docs — it was found and **calibrated empirically** against this deployment via `POST /api/v2/rules/test`: no data → `alertCount 0` without the flag, `1` with it, and the bucket width had to be measured too (step `900`/`1800` false-fire with a live heartbeat; `3600` is the first value that behaves). The measurements are recorded in the rule's own description.
 
-**⑦ Observability ChatOps in Slack.** The same SRE-copilot is a **Slackbot** ([`src/mastra/channels-slack.ts`](src/mastra/channels-slack.ts)): mention or DM it — *`@casper why did latency spike?`* — and the message routes through Mastra's native channel pipeline into the copilot, which investigates over the SigNoz MCP and **streams the answer back into the thread** (live typing, tool calls shown inline). One brain, three surfaces — product chat, the 15-min cron, and Slack — never a second implementation. Safe no-op when `SLACK_BOT_TOKEN` is absent (no adapter, no route).
+**⑦ The self-observation loop — the SRE Sidekick.** A dedicated **SRE-copilot agent** ([`src/mastra/agents/sre.agent.ts`](src/mastra/agents/sre.agent.ts)) answers *"how many tokens did I spend today by model?"*, *"which tool is failing the most?"*, *"did any LLM call error in the last hour?"* by querying **CasperAgent's own SigNoz telemetry over the SigNoz MCP** — and its MCP toolset is itself wrapped in telemetry, so the copilot's own reads show up in the traces. On top: an **autonomous health-watch** runs every 15 min and a **weekly reliability report** — both emit their own spans, and the health-watch is *authorized to self-provision a SigNoz alert* when it spots a regression. **The agent observes itself, reasons over what it sees, and acts on it.**
+
+**⑧ Observability ChatOps in Slack.** The same SRE-copilot is a **Slackbot** ([`src/mastra/channels-slack.ts`](src/mastra/channels-slack.ts)): mention or DM it — *`@casper why did latency spike?`* — and the message routes through Mastra's native channel pipeline into the copilot, which investigates over the SigNoz MCP and **streams the answer back into the thread** (live typing, tool calls shown inline). One brain, three surfaces — product chat, the 15-min cron, and Slack — never a second implementation. Safe no-op when `SLACK_BOT_TOKEN` is absent (no adapter, no route).
+
+### Why not just import SigNoz's own Mastra template?
+
+Fair question, and worth answering directly: SigNoz already ships dashboard templates for [Mastra](https://signoz.io/docs/dashboards/dashboard-templates/mastra-dashboard/) and for the [Vercel AI SDK](https://signoz.io/docs/dashboards/dashboard-templates/vercel-ai-sdk-dashboard/) — and this app runs on both. Those templates are a good baseline: token usage in/out, error rate, p95 latency, model distribution, agent invocations, tool calls. **Start there if you want agent observability in ten minutes.** Everything they cover, this project covers too.
+
+The gap is what a template *cannot* know about your deployment, and it is exactly where the work here went:
+
+| | Official template | This project |
+|---|---|---|
+| Tokens · error rate · p95 · tool calls | ✅ | ✅ |
+| **Real USD cost** per call (per-provider prices, cache classes priced separately) | ✗ | ✅ |
+| **TTFT**, cache-read / cache-creation tokens, normalized `finish_reasons` | ✗ | ✅ |
+| **RAG retrieval hop** — latency, top similarity, empty-retrieval count | ✗ | ✅ |
+| **Answer coverage** eval axis | ✗ | ✅ |
+| **First-class OTel metrics** (counters + histogram with LLM-tuned buckets) | ✗ | ✅ |
+| **Correlated ERROR logs** deep-linked to the failing span | ✗ | ✅ |
+| **Pipeline conversion / drop-off** across the agent run | ✗ | ✅ |
+| **Alerts** — trace/metric twins, logs-based, absence-based watchdog | ✗ | ✅ (10) |
+| **Telemetry read back at runtime** to drive provider failover | ✗ | ✅ |
+
+Some of that is missing from the template for a structural reason, not an oversight: Mastra's own `OtelExporter` implements no `onMetricEvent` and emits no cost, so a template reading Mastra's stock output *cannot* show either. Getting them required standing up a dedicated OTLP MeterProvider and computing cost per span app-side ([`llm-telemetry.ts`](src/mastra/llm-telemetry.ts)). Same story for the duplicate `model_generation` spans that version of the exporter emits — the panels here carry a `casper.self_instrumented` filter so aggregations don't silently double-count.
 
 **→ Setup, import commands, and live verification: [`SIGNOZ.md`](SIGNOZ.md).**
 
@@ -170,11 +193,12 @@ The pitch is up top; this is where the signals live and how they're wired.
 
 | What | Where |
 |---|---|
-| Self-instrumented LLM/tool/RAG/quality spans + `gen_ai.*` metrics + correlated error logs | [`src/mastra/llm-telemetry.ts`](src/mastra/llm-telemetry.ts), [`src/mastra/agent-quality.ts`](src/mastra/agent-quality.ts) |
+| Self-instrumented LLM/tool/RAG/coverage spans + `gen_ai.*` metrics + correlated error logs | [`src/mastra/llm-telemetry.ts`](src/mastra/llm-telemetry.ts), [`src/mastra/agent-quality.ts`](src/mastra/agent-quality.ts) |
 | SRE-copilot (queries own telemetry over SigNoz MCP, self-provisions alerts) | [`src/mastra/agents/sre.agent.ts`](src/mastra/agents/sre.agent.ts), [`src/mastra/mcp-signoz.ts`](src/mastra/mcp-signoz.ts) |
 | Autonomous health-watch + weekly reliability report (own spans) | [`src/server/observability/`](src/server/observability/) |
-| 29-panel agent/LLM dashboard (traces · metrics · logs) | [`deploy/signoz/dashboards/`](deploy/signoz/dashboards/) |
-| 9 alert rules (trace + metric twins, logs-based, health-watch watchdog) | [`deploy/signoz/alerts/`](deploy/signoz/alerts/) |
+| 30-panel agent/LLM dashboard (traces · metrics · logs) | [`deploy/signoz/dashboards/`](deploy/signoz/dashboards/) |
+| 10 alert rules (trace + metric twins, logs-based, health-watch watchdog + absence rule) | [`deploy/signoz/alerts/`](deploy/signoz/alerts/) |
+| One-command apply of every asset above (idempotent, `--dry-run`) | [`scripts/signoz-import.ts`](scripts/signoz-import.ts) — `pnpm signoz:import` |
 | `plan → tool → generate` trace funnel | [`deploy/signoz/funnels/`](deploy/signoz/funnels/) |
 | Reproducible SigNoz stack (server + MCP) | [`deploy/signoz/casting.yaml`](deploy/signoz/casting.yaml) |
 
