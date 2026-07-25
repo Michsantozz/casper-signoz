@@ -330,6 +330,23 @@ async function loadWithCapturedSpans(activeSpan: unknown) {
       }
     },
   }));
+  // Nor the log exporter: the error paths emit a correlated log record, and a
+  // real OTLPLogExporter makes flushLlmTelemetry() wait on an HTTP export to a
+  // collector that doesn't exist here. loadWithCapturedLogs asserts the logs;
+  // this loader only needs them to flush instantly.
+  vi.doMock("@opentelemetry/exporter-logs-otlp-proto", () => ({
+    OTLPLogExporter: class {
+      export(_r: unknown, cb: (r: unknown) => void) {
+        cb({ code: 0 });
+      }
+      shutdown() {
+        return Promise.resolve();
+      }
+      forceFlush() {
+        return Promise.resolve();
+      }
+    },
+  }));
 
   vi.doMock("@mastra/core/observability/context-storage", () => ({
     getCurrentSpan: () => activeSpan,
