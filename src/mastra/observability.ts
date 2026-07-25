@@ -6,6 +6,7 @@ import {
 import type { ObservabilityExporter } from "@mastra/core/observability";
 import { LangfuseExporter } from "@mastra/langfuse";
 import { OtelExporter } from "@mastra/otel-exporter";
+import { withSpanContentRedaction } from "@/mastra/span-redaction";
 
 /**
  * Observability for the agent — traces, model-generation spans, and (crucially)
@@ -75,54 +76,67 @@ export function createObservability(): Observability {
   //     one (see resolveSignozConfig in @mastra/otel-exporter).
   //   - Cloud: SIGNOZ_API_KEY set → `signoz` provider (region defaults to us),
   //     endpoint optional (overrides the ingest.<region>.signoz.cloud default).
+  //
+  // WRAPPED in withSpanContentRedaction: the OtelExporter copies each span's
+  // input/output onto OTLP attributes unconditionally (gen_ai.input.messages,
+  // gen_ai.tool.call.arguments/result, mastra.<type>.input/output) and the agent
+  // instructions onto gen_ai.system_instructions. That is meeting transcripts
+  // and calendar payloads leaving a multi-tenant product in cleartext, and
+  // Mastra's default SensitiveDataFilter does not stop it (it matches sensitive
+  // KEY NAMES, not message bodies). The wrapper redacts on this edge only, so
+  // the storage exporter (same-trust-boundary PG) and Langfuse keep the payload
+  // they need. It also drops the model_chunk spans here — one span per stream
+  // chunk, the highest-volume/lowest-value rows in the service.
   if (process.env.SIGNOZ_API_KEY || process.env.SIGNOZ_ENDPOINT) {
     exporters.push(
-      new OtelExporter({
-        provider: process.env.SIGNOZ_API_KEY
-          ? {
-              signoz: {
-                apiKey: process.env.SIGNOZ_API_KEY,
-                region: process.env.SIGNOZ_REGION as
-                  | "us"
-                  | "eu"
-                  | "in"
-                  | undefined,
-                endpoint: process.env.SIGNOZ_ENDPOINT,
+      withSpanContentRedaction(
+        new OtelExporter({
+          provider: process.env.SIGNOZ_API_KEY
+            ? {
+                signoz: {
+                  apiKey: process.env.SIGNOZ_API_KEY,
+                  region: process.env.SIGNOZ_REGION as
+                    | "us"
+                    | "eu"
+                    | "in"
+                    | undefined,
+                  endpoint: process.env.SIGNOZ_ENDPOINT,
+                },
+              }
+            : {
+                custom: {
+                  // Self-host OTLP HTTP ingest. http/protobuf is SigNoz's
+                  // recommended protocol; the exporter uses
+                  // @opentelemetry/exporter-trace-otlp-proto (traces) and
+                  // -logs-otlp-proto (logs), both installed deps. The base
+                  // endpoint (…/v1/traces) is reused for logs — the exporter
+                  // derives …/v1/logs by swapping the signal-path suffix.
+                  endpoint: process.env.SIGNOZ_ENDPOINT!,
+                  protocol: "http/protobuf",
+                },
               },
-            }
-          : {
-              custom: {
-                // Self-host OTLP HTTP ingest. http/protobuf is SigNoz's
-                // recommended protocol; the exporter uses
-                // @opentelemetry/exporter-trace-otlp-proto (traces) and
-                // -logs-otlp-proto (logs), both installed deps. The base
-                // endpoint (…/v1/traces) is reused for logs — the exporter
-                // derives …/v1/logs by swapping the signal-path suffix.
-                endpoint: process.env.SIGNOZ_ENDPOINT!,
-                protocol: "http/protobuf",
-              },
-            },
-        // Traces + logs. When a log carries traceId/spanId, the OtelExporter
-        // populates native trace context so SigNoz correlates logs to traces.
-        signals: { traces: true, logs: true },
-        // Keep Mastra-native invoke_agent/model_inference spans in the same
-        // service/environment scope as the app's self-instrumented traces,
-        // metrics, and logs. Dashboard filters can therefore be applied
-        // consistently without mixing production, staging, and probes.
-        resourceAttributes: {
-          "service.name": "casper-assistant",
-          "deployment.environment.name":
-            process.env.DEPLOYMENT_ENVIRONMENT ??
-            process.env.VERCEL_ENV ??
-            process.env.NODE_ENV ??
-            "development",
-        },
-        // Diagnostic: SIGNOZ_DEBUG=1 surfaces per-span convert/export decisions
-        // (which span types are skipped/dropped). Off by default.
-        ...(process.env.SIGNOZ_DEBUG
-          ? { logLevel: "debug" as const }
-          : {}),
-      }),
+          // Traces + logs. When a log carries traceId/spanId, the OtelExporter
+          // populates native trace context so SigNoz correlates logs to traces.
+          signals: { traces: true, logs: true },
+          // Keep Mastra-native invoke_agent/model_inference spans in the same
+          // service/environment scope as the app's self-instrumented traces,
+          // metrics, and logs. Dashboard filters can therefore be applied
+          // consistently without mixing production, staging, and probes.
+          resourceAttributes: {
+            "service.name": "casper-assistant",
+            "deployment.environment.name":
+              process.env.DEPLOYMENT_ENVIRONMENT ??
+              process.env.VERCEL_ENV ??
+              process.env.NODE_ENV ??
+              "development",
+          },
+          // Diagnostic: SIGNOZ_DEBUG=1 surfaces per-span convert/export
+          // decisions (which span types are skipped/dropped). Off by default.
+          ...(process.env.SIGNOZ_DEBUG
+            ? { logLevel: "debug" as const }
+            : {}),
+        }),
+      ),
     );
   }
 
