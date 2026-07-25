@@ -197,7 +197,25 @@ services:
   # do loop autônomo + workflows. Sem ele, o agente NÃO é autônomo.
   inngest:
     # Tag pinada (não `latest`). Atualize conscientemente ao subir versão.
-    image: inngest/inngest:v1.5.3
+    #
+    # v1.5.3 entrava em CRASH LOOP permanente (44 restarts observados), o que
+    # deixava o agente sem crons: o loop autônomo e os workflows nunca rodavam.
+    #
+    #   panic: interface conversion: interface {} is []interface {}, not []string
+    #     devserver.(*devserver).importRedisSnapshot  service.go:597
+    #
+    # Não é corrupção de estado — é bug determinístico. O `inngest start` usa um
+    # Redis embutido com snapshot periódico; o snapshot é serializado em JSON, e
+    # em Go um array JSON desserializa como []interface{}. O importador assere
+    # []string, então QUALQUER snapshot contendo chave `set`/`zset` estoura. O
+    # snapshot desta instância tinha 23 (22 zset + 1 set), logo o boot falhava
+    # 100% das vezes, e o próprio inngest reescrevia o snapshot a cada ciclo.
+    #
+    # Verificado empiricamente com o mesmo arquivo de estado nas duas versões:
+    # v1.5.3 → panic no boot; v1.38.1 → migrations aplicadas e boot limpo.
+    # O SDK do app (npm `inngest`) já está em 4.7.0 — era o servidor que estava
+    # atrasado. v1.38.1 exige `--signing-key` (o override já passa).
+    image: inngest/inngest:v1.38.1
     restart: unless-stopped
     logging: *default-logging
     command: ["inngest", "start"]

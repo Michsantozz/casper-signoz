@@ -40,10 +40,26 @@ services:
     # apontando pro endpoint do app (rede interna do compose) pra sincronizar as
     # functions/workflows por polling. Sem isso: 0 functions, crons não disparam.
     #
-    # CRÍTICO: `inngest start` NÃO lê INNGEST_EVENT_KEY/INNGEST_SIGNING_KEY do
-    # ambiente — só via flags --event-key / --signing-key. Sem elas o server usa
-    # keys default e REJEITA todo evento do app ("event key not recognized").
-    # sh -c pra interpolar as keys que o `environment:` do base já injeta.
+    # As keys vão por FLAG, não só por env. Na v1.5.3 isso era obrigatório: o
+    # `inngest start` ignorava INNGEST_EVENT_KEY/INNGEST_SIGNING_KEY do ambiente
+    # e rejeitava todo evento do app ("event key not recognized"). Na v1.38.1 o
+    # server passou a honrar as env vars — verificado: sem `--event-key`, a key
+    # correta é aceita (200) e uma inválida ainda dá 401, ou seja, não vira um
+    # endpoint aberto. As flags ficam como contrato explícito: independem dessa
+    # mudança de comportamento entre versões. sh -c pra interpolar as keys que o
+    # `environment:` do base já injeta.
+    #
+    # RUÍDO CONHECIDO, não é config errada: com um app sincronizado, o próprio
+    # server emite eventos internos de telemetria pra sua API pública, na
+    # loopback do container, usando uma key DERIVADA da signing key (estável
+    # entre restarts) que a própria API não reconhece. Resultado: ~20/min de
+    #   {"level":"ERROR","msg":"rejecting event; event key not recognized"}
+    # Confirmado por captura na interface do container: `POST /dev/traces/system`
+    # e `POST /e/<key-interna>` vindos de 127.0.0.1. Persiste com e sem
+    # `--event-key`, e some quando não há app sincronizado — logo não é a nossa
+    # key. Sem impacto funcional: crons agendam e disparam, functions executam,
+    # eventos do app entram (`inngest/scheduled.timer`, `function.finished`).
+    # Não há flag pra desligar esse emissor no `inngest start --help`.
     command: !override
       - "/bin/sh"
       - "-c"
