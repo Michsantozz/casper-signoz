@@ -2,6 +2,11 @@ import { createAmazonBedrock } from "@ai-sdk/amazon-bedrock";
 import { createOpenAI } from "@ai-sdk/openai";
 
 import { withLlmTelemetry } from "@/mastra/llm-telemetry";
+import {
+  getModelHealth,
+  emitFailoverSpan,
+  type Provider,
+} from "@/mastra/model-health";
 import { requireEnv } from "@/shared/lib/env";
 
 // Bedrock DNS often returns a mix of public and CGNAT (100.64/10) addresses on
@@ -87,16 +92,59 @@ export function createFireworksModel() {
   return fireworks.chat(process.env.FIREWORKS_MODEL_ID ?? DEFAULT_FIREWORKS_MODEL);
 }
 
+// True when a provider's credentials are all present, so we can build it without
+// requireEnv throwing. Guards the failover target: we only switch to a fallback
+// we can actually construct.
+function providerConfigured(p: Provider): boolean {
+  if (p === "bedrock") {
+    return Boolean(
+      process.env.BEDROCK_REGION &&
+        process.env.BEDROCK_MODEL_ID &&
+        process.env.AWS_ACCESS_KEY_ID &&
+        process.env.AWS_SECRET_ACCESS_KEY,
+    );
+  }
+  return Boolean(process.env.FIREWORKS_API_KEY);
+}
+
+function buildProvider(p: Provider) {
+  return p === "bedrock" ? createBedrockModel() : createFireworksModel();
+}
+
+// The provider MODEL_PROVIDER selects (the configured primary).
+function configuredProvider(): Provider {
+  return (process.env.MODEL_PROVIDER ?? "fireworks").toLowerCase() === "bedrock"
+    ? "bedrock"
+    : "fireworks";
+}
+
 // Provider dispatcher — MODEL_PROVIDER selects the backend at request time.
 // Defaults to Fireworks (the hackathon target); Bedrock stays as a fallback so
 // existing flows keep working if FIREWORKS_API_KEY is absent. The returned model
 // is wrapped with the LLM telemetry middleware so every agent/tool generation
 // emits a gen_ai.* span to SigNoz with the real token usage.
+//
+// TELEMETRY-DRIVEN FAILOVER: before building, ask model-health whether the
+// configured provider is currently degraded (from its OWN SigNoz telemetry +
+// this process's recent outcomes). If it is AND the other provider is actually
+// configured, fail over to it and emit a `model_failover` span so the switch is
+// visible in the trace. Fail-open in every direction: any error here, or an
+// unconfigured fallback, and we build the configured provider unchanged — health
+// checking never fails a request.
 export function createModel() {
-  const provider = (process.env.MODEL_PROVIDER ?? "fireworks").toLowerCase();
-  const base =
-    provider === "bedrock" ? createBedrockModel() : createFireworksModel();
-  return withLlmTelemetry(base);
+  const primary = configuredProvider();
+  let chosen = primary;
+  try {
+    const verdict = getModelHealth(primary);
+    const fallback: Provider = primary === "bedrock" ? "fireworks" : "bedrock";
+    if (verdict.degraded && providerConfigured(fallback)) {
+      emitFailoverSpan({ from: primary, to: fallback, verdict });
+      chosen = fallback;
+    }
+  } catch {
+    // Never let health resolution break model construction.
+  }
+  return withLlmTelemetry(buildProvider(chosen));
 }
 
 // ai-sdk LanguageModel for structured generation (generateObject/generateText).

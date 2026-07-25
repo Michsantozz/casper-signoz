@@ -44,6 +44,16 @@ vi.mock("@mastra/langfuse", () => ({
   },
 }));
 
+vi.mock("@mastra/otel-exporter", () => ({
+  OtelExporter: class {
+    kind = "otel";
+    config: unknown;
+    constructor(config: unknown) {
+      this.config = config;
+    }
+  },
+}));
+
 // Lê os exporters passados pra Observability na última construção.
 function exportersFromLastCall(): Array<{ kind: string; config?: unknown }> {
   const config = observabilityCtor.mock.calls.at(-1)?.[0] as {
@@ -65,6 +75,9 @@ beforeEach(() => {
   delete process.env.LANGFUSE_PUBLIC_KEY;
   delete process.env.LANGFUSE_SECRET_KEY;
   delete process.env.LANGFUSE_BASE_URL;
+  delete process.env.SIGNOZ_API_KEY;
+  delete process.env.SIGNOZ_ENDPOINT;
+  delete process.env.DEPLOYMENT_ENVIRONMENT;
 });
 
 afterEach(() => {
@@ -118,5 +131,22 @@ describe("createObservability exporters", () => {
       baseUrl: "https://langfuse.internal",
       environment: "production",
     });
+  });
+
+  it("scopes Mastra-native SigNoz spans by service and environment", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    process.env.DEPLOYMENT_ENVIRONMENT = "staging";
+    process.env.SIGNOZ_ENDPOINT = "http://signoz:4318/v1/traces";
+
+    const exporters = await build();
+    const otel = exporters.find((e) => e.kind === "otel");
+    expect(otel?.config).toEqual(
+      expect.objectContaining({
+        resourceAttributes: {
+          "service.name": "casper-assistant",
+          "deployment.environment.name": "staging",
+        },
+      }),
+    );
   });
 });

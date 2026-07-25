@@ -12,6 +12,7 @@
     "dev:inngest": "npx inngest-cli@latest dev -u http://localhost:3001/api/inngest",
     "build": "next build",
     "bundle:check": "node scripts/check-bundle-budget.mjs",
+    "verify:signoz": "tsx scripts/verify-signoz-health-query.ts",
     "start": "next start",
     "remotion:studio": "remotion studio",
     "remotion:render": "remotion render CasperDemo out/casper-demo.mp4",

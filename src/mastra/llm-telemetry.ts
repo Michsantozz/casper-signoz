@@ -45,6 +45,10 @@ import {
   ATTR_SERVICE_VERSION,
 } from "@opentelemetry/semantic-conventions";
 import { wrapLanguageModel, type LanguageModelMiddleware } from "ai";
+// Late-bound at runtime only (never at module init), so the llm-telemetry ↔
+// model-health import cycle is safe: model-health reads getSignozTracer from
+// here, we feed every call outcome back to it for the failover circuit breaker.
+import { noteLlmOutcome } from "@/mastra/model-health";
 
 // Self-instrumented LLM telemetry.
 //
@@ -139,14 +143,51 @@ function otlpEndpoint(signal: "traces" | "metrics" | "logs"): string {
   return url.toString();
 }
 
-// Optional per-token pricing. Cost is emitted ONLY when both are configured —
-// no placeholder ever ships as a real number. Values are USD per 1M tokens.
-function pricePerToken(envVar: string): number | undefined {
-  const raw = process.env[envVar];
+// Normalize a provider name into an env-var-safe suffix: the AI SDK reports
+// providers as "amazon-bedrock" / "openai.chat", neither of which is a legal
+// env-var segment. Lowercase, then collapse anything that isn't [a-z0-9] into a
+// single underscore: "amazon-bedrock" → "amazon_bedrock", "openai.chat" →
+// "openai_chat".
+function providerEnvSlug(provider: string): string {
+  return provider
+    .toLowerCase()
+    .replaceAll(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function parsePrice(raw: string | undefined): number | undefined {
   if (!raw) return undefined;
   const perMillion = Number(raw);
   if (!Number.isFinite(perMillion) || perMillion < 0) return undefined;
   return perMillion / 1_000_000;
+}
+
+// Optional per-token pricing. Cost is emitted ONLY when both input and output
+// are configured — no placeholder ever ships as a real number. USD per 1M tokens.
+//
+// PER-PROVIDER OVERRIDE: a single global price pair is wrong the moment more
+// than one provider serves traffic — which is exactly what model.ts's failover
+// makes happen. Failing over Fireworks → Bedrock kept pricing the Bedrock call
+// at the Fireworks rate, so `gen_ai.usage.cost` (and the cost panels, the
+// cost-spike alert, and the SRE-copilot's "what did I spend") went silently
+// wrong during the incident the failover exists to handle. Cost was not omitted
+// — it was emitted at the wrong rate, which reads as plausible in a
+// break-down-by-model panel.
+//
+// So each price resolves provider-first, global-second:
+//   LLM_PRICE_INPUT_PER_MTOK__amazon_bedrock   (this provider)
+//   LLM_PRICE_INPUT_PER_MTOK                   (fallback, unchanged behavior)
+// Deployments with one provider keep working with the plain global pair; a
+// deployment with a fallback prices each provider at its own rate.
+function pricePerToken(envVar: string, provider?: string): number | undefined {
+  if (provider) {
+    const slug = providerEnvSlug(provider);
+    if (slug) {
+      const scoped = parsePrice(process.env[`${envVar}__${slug}`]);
+      if (scoped !== undefined) return scoped;
+    }
+  }
+  return parsePrice(process.env[envVar]);
 }
 
 // Coerce a provider's finishReason into the plain string semconv expects
@@ -507,22 +548,30 @@ function emitLlmSpan(args: {
   ttftMs?: number;
   error?: unknown;
 }) {
+  // Feed the failover circuit breaker on EVERY call (before the tracer gate), so
+  // the local health window stays accurate even if a span is later skipped. ok =
+  // no error on this call.
+  noteLlmOutcome(args.provider, !args.error);
+
   const tracer = getSignozTracer();
   if (!tracer) return;
 
   const { inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens } =
     extractUsage(args.usage);
 
-  const priceIn = pricePerToken("LLM_PRICE_INPUT_PER_MTOK");
-  const priceOut = pricePerToken("LLM_PRICE_OUTPUT_PER_MTOK");
+  // Prices resolve per-PROVIDER first (…__amazon_bedrock), then the global pair.
+  // Without this the fallback provider's calls are priced at the primary's rate
+  // — see pricePerToken.
+  const priceIn = pricePerToken("LLM_PRICE_INPUT_PER_MTOK", args.provider);
+  const priceOut = pricePerToken("LLM_PRICE_OUTPUT_PER_MTOK", args.provider);
   // Cache tokens are priced DIFFERENTLY from fresh input: providers bill
   // cache-read at a fraction of input (~0.1x on Anthropic) and cache-write at a
   // premium (~1.25x). Optional — when unset, each falls back to the plain input
   // price (previous behavior), so cost is never fabricated from a missing env.
   const priceCacheRead =
-    pricePerToken("LLM_PRICE_CACHE_READ_PER_MTOK") ?? priceIn;
+    pricePerToken("LLM_PRICE_CACHE_READ_PER_MTOK", args.provider) ?? priceIn;
   const priceCacheWrite =
-    pricePerToken("LLM_PRICE_CACHE_WRITE_PER_MTOK") ?? priceIn;
+    pricePerToken("LLM_PRICE_CACHE_WRITE_PER_MTOK", args.provider) ?? priceIn;
   // AI SDK v3 reports inputTokens.total INCLUSIVE of cache read+write. Pricing
   // the whole total at the input rate double-charges cache the wrong way (see
   // above). Split it: fresh input at priceIn, each cache class at its own rate.
@@ -575,6 +624,9 @@ function emitLlmSpan(args: {
   // parser), so we stamp our own boolean marker and the dashboards/alerts add
   // `AND casper.self_instrumented = true` to select ONLY our cost-bearing spans.
   span.setAttribute("casper.self_instrumented", true);
+  // Funnel containment marker — see inMastraAgentRun(). Lets the pipeline
+  // conversion panels count only calls that happened inside an agent run.
+  span.setAttribute("casper.in_agent_run", inMastraAgentRun());
   if (inputTokens !== undefined) {
     span.setAttribute("gen_ai.usage.input_tokens", inputTokens);
   }
@@ -774,7 +826,10 @@ export function parentContextFromLink(link: TraceLink): Context {
   });
 }
 
-export function mastraParentContext(): Context {
+// The live Mastra span's OTel-compatible ids, or undefined when we're not inside
+// a Mastra agent run (a workflow step, a cron, a one-shot script, a test probe).
+// Pure read — no side effects, safe to call more than once per emitted span.
+function mastraSpanRef(): TraceLink | undefined {
   try {
     const span = getCurrentSpan() as
       | { id?: string; traceId?: string }
@@ -787,22 +842,49 @@ export function mastraParentContext(): Context {
       SPAN_ID_RE.test(spanId) &&
       TRACE_ID_RE.test(traceId)
     ) {
-      // Register the FIRST valid ref this turn so the after() answer-quality
-      // scorer can join this trace. First = closest to the agent_run root.
-      const store = turnTraceStore.getStore();
-      if (store && !store.link) store.link = { traceId, spanId };
-      return trace.setSpanContext(context.active(), {
-        traceId,
-        spanId,
-        // Sampled so SigNoz keeps the child; isRemote so OTel treats it as an
-        // injected parent rather than one it started.
-        traceFlags: TraceFlags.SAMPLED,
-        isRemote: true,
-      });
+      return { traceId, spanId };
     }
   } catch {
-    // getCurrentSpan should never throw, but parenting is best-effort — a
-    // detached span beats losing telemetry.
+    // getCurrentSpan should never throw, but this is best-effort — treating it
+    // as "no active run" is strictly safer than throwing on the telemetry path.
+  }
+  return undefined;
+}
+
+// Is this span being emitted from INSIDE a Mastra agent run?
+//
+// The pipeline-conversion panels model `invoke_agent → execute_tool → chat` by
+// counting distinct trace_ids per stage. Counting each stage independently is
+// wrong: tools also execute OUTSIDE an agent run (workflow steps like list_bots,
+// health probes, e2e fixtures), and those traces have an execute_tool span but
+// no invoke_agent parent. That makes the tool stage's numerator exceed the
+// agent-run denominator and the conversion formula reports >100% — verified in
+// prod at 139% (46 tool traces over 33 agent runs, 15 of them parentless).
+//
+// A funnel needs containment, which the query builder can't express across spans
+// of one trace. So we stamp the containment ON the span: true only when Mastra
+// has a live AISpan, i.e. the call really happened inside an agent run. The three
+// stage panels filter on it and workflow/probe traffic drops out by construction,
+// no name-matching and no environment blocklist to keep in sync.
+export function inMastraAgentRun(): boolean {
+  return mastraSpanRef() !== undefined;
+}
+
+export function mastraParentContext(): Context {
+  const ref = mastraSpanRef();
+  if (ref) {
+    // Register the FIRST valid ref this turn so the after() answer-quality
+    // scorer can join this trace. First = closest to the agent_run root.
+    const store = turnTraceStore.getStore();
+    if (store && !store.link) store.link = ref;
+    return trace.setSpanContext(context.active(), {
+      traceId: ref.traceId,
+      spanId: ref.spanId,
+      // Sampled so SigNoz keeps the child; isRemote so OTel treats it as an
+      // injected parent rather than one it started.
+      traceFlags: TraceFlags.SAMPLED,
+      isRemote: true,
+    });
   }
   return context.active();
 }
@@ -959,6 +1041,10 @@ function emitToolSpan(args: {
   // same execution, so the tool panels/alerts filter `AND
   // casper.self_instrumented = true` to count ours only. See emitLlmSpan.
   span.setAttribute("casper.self_instrumented", true);
+  // Funnel containment marker — see inMastraAgentRun(). False for tools run by a
+  // workflow step, a cron, or a test probe: those traces have no invoke_agent
+  // parent and would otherwise push the tool-conversion numerator above 100%.
+  span.setAttribute("casper.in_agent_run", inMastraAgentRun());
   if (args.error) {
     span.setStatus({ code: SpanStatusCode.ERROR });
     span.setAttribute(
@@ -1078,6 +1164,9 @@ function emitRetrievalSpan(args: {
   // Discriminator our versioned SigNoz dashboards/alerts filter on. New value
   // (retrieval) — distinct from model_generation / tool_call.
   span.setAttribute("mastra.span.type", "retrieval");
+  span.setAttribute("casper.self_instrumented", true);
+  // Funnel containment marker — see inMastraAgentRun().
+  span.setAttribute("casper.in_agent_run", inMastraAgentRun());
   // OTel DB semantic-convention attrs so the span also reads as a vector search.
   span.setAttribute("db.system", "pgvector");
   span.setAttribute("db.operation.name", "query");

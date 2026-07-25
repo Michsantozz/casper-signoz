@@ -517,6 +517,91 @@ describe("emitLlmSpan — cache-aware cost (SigNoz on)", () => {
   });
 });
 
+describe("emitLlmSpan — per-provider pricing (SigNoz on)", () => {
+  // The failover (model-health.ts) can reroute a turn from the primary provider
+  // to the fallback mid-incident. With only a GLOBAL price pair, the fallback's
+  // call was priced at the primary's rate — cost was not omitted, it was emitted
+  // WRONG, in the exact window the cost panels/alert matter most.
+  const scoped = [
+    "LLM_PRICE_INPUT_PER_MTOK__amazon_bedrock",
+    "LLM_PRICE_OUTPUT_PER_MTOK__amazon_bedrock",
+    "LLM_PRICE_CACHE_READ_PER_MTOK__amazon_bedrock",
+  ];
+  afterEach(() => {
+    for (const key of scoped) delete process.env[key];
+  });
+
+  const priceCall = async (provider: string) => {
+    const { mod, flush } = await loadWithCapturedSpans(VALID_SPAN);
+    await mod.llmTelemetryMiddleware.wrapGenerate!({
+      doGenerate: async () => ({
+        usage: { inputTokens: { total: 1000 }, outputTokens: { total: 400 } },
+        finishReason: "stop",
+      }),
+      model: { modelId: "m", provider },
+    } as never);
+    return (await flush()).find((s) => s.name.startsWith("chat "));
+  };
+
+  it("prices the fallback provider at ITS rate, not the primary's", async () => {
+    process.env.LLM_PRICE_INPUT_PER_MTOK = "0.95"; // global: Fireworks
+    process.env.LLM_PRICE_OUTPUT_PER_MTOK = "4.00";
+    process.env.LLM_PRICE_INPUT_PER_MTOK__amazon_bedrock = "3.00";
+    process.env.LLM_PRICE_OUTPUT_PER_MTOK__amazon_bedrock = "15.00";
+
+    // "amazon-bedrock" → slug amazon_bedrock. cost = (1000*3 + 400*15)/1e6
+    const span = await priceCall("amazon-bedrock");
+    expect(span!.attributes["gen_ai.usage.cost"]).toBeCloseTo(0.009, 6);
+    // Sanity: the global rate would have produced a very different number.
+    expect(span!.attributes["gen_ai.usage.cost"]).not.toBeCloseTo(0.00255, 6);
+  });
+
+  it("falls back to the global price when the provider has no override", async () => {
+    process.env.LLM_PRICE_INPUT_PER_MTOK = "0.95";
+    process.env.LLM_PRICE_OUTPUT_PER_MTOK = "4.00";
+    process.env.LLM_PRICE_INPUT_PER_MTOK__amazon_bedrock = "3.00";
+    process.env.LLM_PRICE_OUTPUT_PER_MTOK__amazon_bedrock = "15.00";
+
+    // openai.chat (Fireworks path) has no override → global. (1000*0.95 + 400*4)/1e6
+    const span = await priceCall("openai.chat");
+    expect(span!.attributes["gen_ai.usage.cost"]).toBeCloseTo(0.00255, 6);
+  });
+
+  it("falls a cache price back to that provider's INPUT override, not the global one", async () => {
+    // Cache prices fall back to the input price. That fallback must stay INSIDE
+    // the provider — else a Bedrock cache-read is billed at the Fireworks input
+    // rate, reintroducing the same cross-provider mixing one level down.
+    process.env.LLM_PRICE_INPUT_PER_MTOK = "0.95";
+    process.env.LLM_PRICE_OUTPUT_PER_MTOK = "4.00";
+    process.env.LLM_PRICE_INPUT_PER_MTOK__amazon_bedrock = "3.00";
+    process.env.LLM_PRICE_OUTPUT_PER_MTOK__amazon_bedrock = "15.00";
+
+    const { mod, flush } = await loadWithCapturedSpans(VALID_SPAN);
+    await mod.llmTelemetryMiddleware.wrapGenerate!({
+      doGenerate: async () => ({
+        usage: {
+          inputTokens: { total: 1000, cacheRead: 600 },
+          outputTokens: { total: 400 },
+        },
+        finishReason: "stop",
+      }),
+      model: { modelId: "m", provider: "amazon-bedrock" },
+    } as never);
+    const span = (await flush()).find((s) => s.name.startsWith("chat "));
+    // fresh = 400. cost = (400*3 + 600*3 + 400*15)/1e6 = 9000/1e6
+    expect(span!.attributes["gen_ai.usage.cost"]).toBeCloseTo(0.009, 6);
+  });
+
+  it("ignores a malformed override and uses the global price", async () => {
+    process.env.LLM_PRICE_INPUT_PER_MTOK = "0.95";
+    process.env.LLM_PRICE_OUTPUT_PER_MTOK = "4.00";
+    process.env.LLM_PRICE_INPUT_PER_MTOK__amazon_bedrock = "not-a-number";
+
+    const span = await priceCall("amazon-bedrock");
+    expect(span!.attributes["gen_ai.usage.cost"]).toBeCloseTo(0.00255, 6);
+  });
+});
+
 describe("emitToolSpan — attributes + parenting (SigNoz on)", () => {
   it("emits gen_ai.tool.name + error status, parented under Mastra", async () => {
     const { mod, flush } = await loadWithCapturedSpans(VALID_SPAN);

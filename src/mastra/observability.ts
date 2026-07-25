@@ -105,6 +105,18 @@ export function createObservability(): Observability {
         // Traces + logs. When a log carries traceId/spanId, the OtelExporter
         // populates native trace context so SigNoz correlates logs to traces.
         signals: { traces: true, logs: true },
+        // Keep Mastra-native invoke_agent/model_inference spans in the same
+        // service/environment scope as the app's self-instrumented traces,
+        // metrics, and logs. Dashboard filters can therefore be applied
+        // consistently without mixing production, staging, and probes.
+        resourceAttributes: {
+          "service.name": "casper-assistant",
+          "deployment.environment.name":
+            process.env.DEPLOYMENT_ENVIRONMENT ??
+            process.env.VERCEL_ENV ??
+            process.env.NODE_ENV ??
+            "development",
+        },
         // Diagnostic: SIGNOZ_DEBUG=1 surfaces per-span convert/export decisions
         // (which span types are skipped/dropped). Off by default.
         ...(process.env.SIGNOZ_DEBUG

@@ -263,6 +263,42 @@ function refine(env: NodeJS.ProcessEnv, toggles: Toggles, ctx: z.RefinementCtx) 
     require("LANGFUSE_PUBLIC_KEY", "when Langfuse export is configured");
     require("LANGFUSE_SECRET_KEY", "when Langfuse export is configured");
   }
+
+  // Per-provider price overrides (LLM_PRICE_*_PER_MTOK__<provider>). These are
+  // DYNAMIC keys, so the static schema above can't declare them — but they feed
+  // the same cost computation, and the whole reason the global pair is validated
+  // is that a typo silently zeroes cost instead of erroring. Apply the identical
+  // check to every override present in the environment.
+  for (const [key, value] of Object.entries(env)) {
+    if (!/^LLM_PRICE_[A-Z_]+_PER_MTOK__[a-z0-9_]+$/.test(key)) continue;
+    if (value === undefined || value === "") continue;
+    if (!Number.isFinite(Number(value)) || Number(value) < 0) {
+      ctx.addIssue({
+        code: "custom",
+        path: [key],
+        message: "must be a non-negative number (USD per 1M tokens)",
+      });
+    }
+  }
+
+  // A per-provider override is only meaningful as a PAIR: cost is emitted only
+  // when input AND output both resolve, and each falls back to the global pair
+  // independently. Setting just one for a provider means that provider silently
+  // prices half its tokens at another provider's rate — the exact bug the
+  // override exists to fix. Require both (or neither) per provider.
+  const overrideProviders = new Set<string>();
+  for (const key of Object.keys(env)) {
+    const match = /^LLM_PRICE_(INPUT|OUTPUT)_PER_MTOK__([a-z0-9_]+)$/.exec(key);
+    if (match && env[key]) overrideProviders.add(match[2]);
+  }
+  for (const provider of overrideProviders) {
+    for (const side of ["INPUT", "OUTPUT"] as const) {
+      require(
+        `LLM_PRICE_${side}_PER_MTOK__${provider}`,
+        `when a per-provider price override is set for "${provider}" (input and output must both be set, or cost for that provider is computed from another provider's rate)`,
+      );
+    }
+  }
 }
 
 const envSchema = baseSchema.and(

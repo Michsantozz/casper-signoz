@@ -1,0 +1,88 @@
+{
+  "alert": "CasperAgent — Model failover triggered",
+  "alertType": "TRACES_BASED_ALERT",
+  "ruleType": "threshold_rule",
+  "schemaVersion": "v2alpha1",
+  "description": "createModel() rerouted off the configured primary provider to the fallback because model-health judged the primary degraded (mastra.span.type = model_failover). This is telemetry-driven failover firing: the app read its OWN error-rate/p95 back out of SigNoz (or hit a local error burst) and protected the turn on its own. A failover is not itself an outage — the request succeeded on the fallback — but it means the primary provider is unhealthy RIGHT NOW and every turn is paying the fallback's price/latency until it recovers. Check the primary provider's status, then the llm-latency-p95 / tool-call-failures rules and the model_generation error spans for gen_ai.provider.name = the primary. The trigger is in model.failover.source: local = this pod's recent error burst, signoz = a fleet-wide regression, forced = a demo/override toggle (MODEL_HEALTH_FORCE_DEGRADED).",
+  "condition": {
+    "compositeQuery": {
+      "queries": [
+        {
+          "type": "builder_query",
+          "spec": {
+            "name": "A",
+            "signal": "traces",
+            "stepInterval": 60,
+            "disabled": false,
+            "filter": {
+              "expression": "service.name = 'casper-assistant' AND deployment.environment.name = 'production' AND mastra.span.type = 'model_failover' AND casper.self_instrumented = true"
+            },
+            "groupBy": [
+              {
+                "name": "model.failover.to",
+                "fieldDataType": "string",
+                "fieldContext": "tag"
+              }
+            ],
+            "legend": "{{model.failover.to}}",
+            "having": {
+              "expression": ""
+            },
+            "aggregations": [
+              {
+                "expression": "count()"
+              }
+            ]
+          }
+        }
+      ],
+      "panelType": "graph",
+      "queryType": "builder",
+      "unit": "none"
+    },
+    "selectedQueryName": "A",
+    "thresholds": {
+      "kind": "basic",
+      "spec": [
+        {
+          "name": "warning",
+          "target": 1,
+          "matchType": "at_least_once",
+          "op": "above",
+          "channels": [
+            "casper-default"
+          ]
+        }
+      ]
+    }
+  },
+  "labels": {
+    "severity": "warning",
+    "component": "model-failover"
+  },
+  "annotations": {
+    "summary": "Failed over to {{$labels.model_failover_to}} {{$value}} time(s)",
+    "description": "The configured primary provider is degraded; requests are running on the fallback ({{$labels.model_failover_to}}) until it recovers. Inspect the primary provider's health."
+  },
+  "evaluation": {
+    "kind": "rolling",
+    "spec": {
+      "evalWindow": "5m",
+      "frequency": "1m"
+    }
+  },
+  "notificationSettings": {
+    "groupBy": [
+      "model.failover.to"
+    ],
+    "renotify": {
+      "enabled": true,
+      "interval": "1h",
+      "alertStates": [
+        "firing"
+      ]
+    },
+    "usePolicy": false
+  },
+  "disabled": false
+}
