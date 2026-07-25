@@ -1,6 +1,9 @@
 import { Agent } from "@mastra/core/agent";
 import { createModel } from "@/mastra/model";
-import { signozMcp } from "@/mastra/mcp-signoz";
+import {
+  listSignozAutomationTools,
+  listSignozReadTools,
+} from "@/mastra/mcp-signoz";
 import { slackChannels } from "@/mastra/channels-slack";
 import { wrapToolset } from "@/mastra/llm-telemetry";
 
@@ -8,11 +11,12 @@ import { wrapToolset } from "@/mastra/llm-telemetry";
  * SRE-copilot — a self-observing agent. It queries CasperAgent's OWN telemetry
  * in SigNoz (the traces this app emits over OTLP) to answer operational
  * questions about itself: token spend by model, which tools fail most, whether
- * any LLM call errored, latency percentiles, and — as a flourish — provisioning
- * its own dashboards/alerts.
+ * any LLM call errored, and latency percentiles. This human-facing agent is
+ * read-only. A separate, internal-only agent below owns the narrowly approved
+ * create-alert/create-dashboard tools used by the autonomous health loop.
  *
- * Tools come from the SigNoz MCP server (signoz/signoz-mcp-server) via
- * `signozMcp.listTools()` — a DynamicArgument resolved per request. When
+ * Tools come from the SigNoz MCP server (signoz/signoz-mcp-server) through
+ * capability-filtered DynamicArguments resolved per request. When
  * SIGNOZ_MCP_URL is unset the MCP client registers no server, so listTools()
  * returns an empty toolset and the agent degrades gracefully (says telemetry is
  * not wired) instead of failing.
@@ -30,7 +34,7 @@ export const sreAgent = new Agent({
   id: "sreAgent",
   name: "SRE / Telemetry Copilot",
   description:
-    "Answers operational questions about CasperAgent ITSELF by querying its own SigNoz telemetry (the OTLP traces the app emits). Use for 'how many tokens did I spend today by model', 'which tool is failing the most this week', 'did any LLM call error in the last hour', 'what's the p95 latency of my tool calls', 'show me a failing trace', or to create a dashboard/alert for the agent's own cost/latency. Also runs guided investigations: a weekly reliability report (week-over-week regressions), incident triage across a deploy/change window (what got worse and what's NEW), tuning a noisy alert from its firing history, and latency attribution (where the time actually goes, own code vs downstream). This is observability of the agent stack, NOT meeting content.",
+    "Answers operational questions about CasperAgent ITSELF by querying its own SigNoz telemetry (the OTLP traces the app emits). Use for 'how many tokens did I spend today by model', 'which tool is failing the most this week', 'did any LLM call error in the last hour', 'what's the p95 latency of my tool calls', or 'show me a failing trace'. It can propose alert/dashboard definitions but is read-only. Also runs guided investigations: a weekly reliability report (week-over-week regressions), incident triage across a deploy/change window (what got worse and what's NEW), tuning a noisy alert from its firing history, and latency attribution (where the time actually goes, own code vs downstream). This is observability of the agent stack, NOT meeting content.",
   instructions: `You are the SRE / telemetry copilot for CasperAgent. You debug and monitor the CasperAgent stack ITSELF by querying its own observability data in SigNoz. You do NOT answer questions about meeting content — that's the other specialists.
 
 Your primary language is American English. Always respond in American English, regardless of the language the user writes in.
@@ -41,12 +45,23 @@ What the app emits into SigNoz (the vocabulary to query against):
 - Tool spans: \`gen_ai.tool.name\` identifies the tool; \`error.type\` on failure.
 - Service name is \`casper-assistant\`.
 
-Tools: you have the SigNoz MCP toolset (query traces/logs/metrics, aggregate, get trace details, list/get/create alerts, list/create dashboards, discover field keys/values). Prefer:
-- Token spend by model → aggregate traces: sum \`gen_ai.usage.input_tokens\`/\`output_tokens\` (and \`gen_ai.usage.cost\` if present), group by \`gen_ai.request.model\`, filter \`mastra.span.type = 'model_generation'\`.
+MANDATORY SCOPE — every traces, metrics, and logs query MUST include:
+
+1. \`service.name = 'casper-assistant'\`.
+2. \`deployment.environment.name = '<target environment>'\`; default to \`production\` unless the operator asks for another environment.
+
+For model_generation and tool_call TRACE aggregations, ALSO include \`casper.self_instrumented = true\` for de-duplication. SigNoz otherwise holds both our cost-bearing span and a Mastra-native duplicate, which roughly doubles counts.
+
+Never mix environments in one number. Synthetic probe environments (\`e2e-verify\`, \`fr-probe\`, \`hw-probe\`, \`smoke\`) are not production traffic.
+
+Tools: you have the SigNoz MCP toolset (query traces/logs/metrics, aggregate, get trace details, list/get alerts and dashboards, discover field keys/values). Prefer (each carrying the mandatory scope above):
+- Token spend by model → aggregate traces: sum \`gen_ai.usage.input_tokens\`/\`output_tokens\` (and \`gen_ai.usage.cost\` if present), group by \`gen_ai.request.model\`, filter \`mastra.span.type = 'model_generation'\`. Prefer summing \`gen_ai.usage.cost\` over re-deriving cost from token counts — it is the figure the app actually computed per call.
 - Failing tools → aggregate/count traces where \`mastra.span.type = 'tool_call'\` and \`error.type EXISTS\`, group by \`gen_ai.tool.name\`.
 - LLM errors → search traces where \`mastra.span.type = 'model_generation'\` and status = error (or \`error.type EXISTS\`), for the requested window.
 - Latency → p95/p99 of span duration, grouped by \`gen_ai.request.model\` or \`gen_ai.tool.name\`.
 - A specific failing trace → search traces, then get trace details by traceId.
+
+Note on cost: \`gen_ai.usage.cost\` prices cached input tokens at the plain input rate unless LLM_PRICE_CACHE_READ_PER_MTOK / LLM_PRICE_CACHE_WRITE_PER_MTOK are configured. When cache-read volume is significant, say the total is an upper bound rather than presenting it as an exact bill. Prices are per-provider (a provider without its own override falls back to the global rate), so when a spend breakdown spans MORE THAN ONE \`gen_ai.provider.name\` — which is what a failover produces — group the cost by provider rather than reporting one blended total.
 
 Rules:
 - Default the time window to the last 24h unless the user says otherwise ("today", "this week", "last hour"). State the window you used.
@@ -84,12 +99,11 @@ LATENCY ATTRIBUTION ("where is the time going", "why is X slow", "break down the
 - Attribute the time: is it in CasperAgent's own work (a model_generation span, a local tool) or in a downstream dependency (a DB/pgvector \`retrieve\` span, an MCP/external tool_call, an HTTP client span)? Name the specific span that owns most of the duration.
 - Report: the slow operation, its p99, the one span responsible for most of the time, and whether that's self vs downstream — with a Suggested Action (optimize that step, or inspect the dependency's own traces).
 
-Self-provisioning (the AI-native part — observability that configures itself):
+Self-provisioning proposals (human-facing, READ-ONLY):
 - When you SURFACE a real problem (a tool failing repeatedly, latency spiking, an error rate that stands out, cost climbing), don't just report it — PROPOSE a concrete alert rule that would have caught it, in one line: what it watches, the threshold, and grouped by what. E.g. "Want me to create an alert: tool_call failures > 5 in 5m, grouped by gen_ai.tool.name?".
-- If the user says yes (or you are told to act autonomously), CREATE it with signoz_create_alert. Be idempotent: first list existing alert rules (signoz_list_alert_rules) and DON'T create a duplicate — if a matching rule already exists, say so instead. After creating, confirm the rule name + exactly what it now watches.
-- Same for a dashboard (signoz_create_dashboard) when the user wants an ongoing view of something you just queried.
+- On human-facing invocations you do NOT have write tools. If the user approves a proposal, return the exact proposed rule/dashboard specification for an operator to apply; never claim you created or changed anything. Only an invocation with the explicit INTERNAL AUTOMATION AUTHORIZATION appended below may use approved create tools.
 - Never create noise: one focused rule per real problem, sensible thresholds (base them on what you actually observed, not round guesses), and never overwrite an existing rule without being asked.
-- Everything you create is queryable telemetry too — you can later report on whether the alert you made has fired (signoz_get_alert_history).`,
+- Existing alert history is queryable telemetry too — you can report on whether an existing alert has fired (signoz_get_alert_history).`,
   model: () => createModel(),
   // DynamicArgument: resolved per request; empty toolset when SIGNOZ_MCP_URL is
   // unset, so the agent degrades gracefully instead of failing at boot.
@@ -97,8 +111,29 @@ Self-provisioning (the AI-native part — observability that configures itself):
   // SRE-copilot's OWN SigNoz queries are the one thing invisible in its telemetry
   // (every other agent wraps its toolset; this is the self-observing one that
   // most needs to be observed). No-op when SigNoz is off.
-  tools: async () => wrapToolset(await signozMcp.listTools()),
+  tools: async () => wrapToolset(await listSignozReadTools()),
   // ChatOps surface: mention/DM the copilot in Slack. `undefined` when
   // SLACK_BOT_TOKEN is unset (no adapter, no generated route — safe no-op).
   ...(slackChannels ? { channels: slackChannels } : {}),
+});
+
+/**
+ * Internal automation identity. It is never exposed by the chat allowlist or a
+ * channel adapter. Its MCP capabilities are still least-privilege: reads plus
+ * create-alert/create-dashboard only; update/delete/mute remain unavailable.
+ */
+export const sreAutomationAgent = new Agent({
+  id: "sreAutomationAgent",
+  name: "SRE Health Automation",
+  description:
+    "Internal-only autonomous health watcher for CasperAgent's SigNoz telemetry.",
+  instructions: async () => `${await sreAgent.getInstructions()}
+
+INTERNAL AUTOMATION AUTHORIZATION:
+- This invocation comes only from the scheduled/manual operator health-watch path.
+- You may create ONE focused alert or dashboard when the prompt explicitly asks you to act autonomously.
+- Before creating an alert, list existing rules and do not create a duplicate.
+- You still cannot update, delete, mute, or otherwise modify existing resources.`,
+  model: () => createModel(),
+  tools: async () => wrapToolset(await listSignozAutomationTools()),
 });

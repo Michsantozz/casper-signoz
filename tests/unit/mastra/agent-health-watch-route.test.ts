@@ -31,7 +31,11 @@ beforeEach(() => {
   vi.resetModules();
   getSession.mockReset();
   runAgentHealthWatch.mockReset();
-  getSession.mockResolvedValue({ user: { id: "op-1" } });
+  process.env.OPERATOR_USER_IDS = "op-1";
+  delete process.env.OPERATOR_EMAILS;
+  getSession.mockResolvedValue({
+    user: { id: "op-1", email: "operator@example.com" },
+  });
   runAgentHealthWatch.mockResolvedValue({
     ran: true,
     summary: "ok",
@@ -53,10 +57,20 @@ describe("POST agent-health-watch — auth gate", () => {
     expect(res.status).toBe(401);
     expect(runAgentHealthWatch).not.toHaveBeenCalled();
   });
+
+  it("authenticated non-operator → 403, watch not run", async () => {
+    getSession.mockResolvedValue({
+      user: { id: "user-1", email: "user@example.com" },
+    });
+    const res = await post("http://x/api/internal/agent-health-watch");
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: "operator_required" });
+    expect(runAgentHealthWatch).not.toHaveBeenCalled();
+  });
 });
 
 describe("POST agent-health-watch — run", () => {
-  it("authed default → runs with notify:true and returns the result", async () => {
+  it("operator default → runs with notify:true and returns the result", async () => {
     const res = await post("http://x/api/internal/agent-health-watch");
     expect(res.status).toBe(200);
     expect(runAgentHealthWatch).toHaveBeenCalledWith({ notify: true });

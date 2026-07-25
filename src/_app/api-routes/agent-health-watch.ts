@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/features/auth/model/session";
+import { isOperator } from "@/shared/lib/operator";
 
 /**
  * Manual trigger for the autonomous agent-health watch.
@@ -10,14 +11,17 @@ import { getSession } from "@/features/auth/model/session";
  * (runAgentHealthWatch): the sreAgent inspects the app's own SigNoz telemetry
  * and provisions an alert if warranted.
  *
- * Auth-gated to a signed-in session (this is an operational endpoint, not a
- * per-tenant one). `?notify=0` runs the pass and returns the summary WITHOUT
+ * Restricted to an explicitly configured operator (this is deployment-wide,
+ * not per-tenant). `?notify=0` runs the pass and returns the summary WITHOUT
  * fanning out notifications — handy for a dry demo run.
  */
 export async function POST(req: Request) {
   const session = await getSession();
   if (!session?.user) {
     return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
+  }
+  if (!isOperator(session.user)) {
+    return NextResponse.json({ error: "operator_required" }, { status: 403 });
   }
 
   const url = new URL(req.url);

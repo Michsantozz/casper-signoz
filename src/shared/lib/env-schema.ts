@@ -64,6 +64,11 @@ const togglesSchema = z.object({
   GOOGLE_CLIENT_SECRET: z.string().optional(),
   GOOGLE_OAUTH_REDIRECT_URI: z.url().optional(),
   OAUTH_STATE_SECRET: z.string().optional(),
+  // Workspace-wide operational access. Authentication alone must never expose
+  // the SRE agent or manual health-watch trigger. Either CSV allowlist may be
+  // used; when both are absent, operator authorization fails closed.
+  OPERATOR_USER_IDS: z.string().optional(),
+  OPERATOR_EMAILS: z.string().optional(),
   // Recall webhooks — optional, but if you receive webhooks the secret is
   // required (the routes fail-closed without it anyway).
   RECALL_API_KEY: z.string().optional(),

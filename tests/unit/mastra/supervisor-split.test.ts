@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 
 /**
  * Supervisor split (mastra/agents/*.agent.ts). The assistantAgent is a
- * SUPERVISOR that delegates two domains to sub-agents:
+ * SUPERVISOR that delegates two user-scoped domains to sub-agents:
  *  - minutesAgent  → per-meeting minutes (summarize/transcript/participants/recording)
  *  - searchAgent   → cross-meeting history (list/search)
  *
@@ -91,13 +91,9 @@ describe("assistantAgent — supervisor", () => {
   it("registers its sub-agents on its `agents` field", async () => {
     const { assistantAgent } = await import("@/mastra/agents/assistant.agent");
     const sub = assistantAgent.__getStaticAgents() ?? {};
-    // sreAgent joined minutes/search when the SRE-copilot shipped (6cdc558): the
-    // supervisor now also delegates operational/telemetry questions.
-    expect(Object.keys(sub).sort()).toEqual([
-      "minutesAgent",
-      "searchAgent",
-      "sreAgent",
-    ]);
+    // The deployment-wide SRE agent is deliberately absent: regular users
+    // cannot reach it indirectly through supervisor delegation.
+    expect(Object.keys(sub).sort()).toEqual(["minutesAgent", "searchAgent"]);
   });
 
   it("keeps its own scheduling / calendar / bot-control tools", async () => {

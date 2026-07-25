@@ -2,7 +2,7 @@ import { Mastra } from "@mastra/core";
 import { assistantAgent } from "./agents/assistant.agent";
 import { minutesAgent } from "./agents/minutes.agent";
 import { searchAgent } from "./agents/search.agent";
-import { sreAgent } from "./agents/sre.agent";
+import { sreAgent, sreAutomationAgent } from "./agents/sre.agent";
 import { meetingReconcileWorkflow } from "./workflows/meeting-reconcile.workflow";
 import { meetingEnrichWorkflow } from "./workflows/meeting-enrich.workflow";
 import { meetingBackfillWorkflow } from "./workflows/meeting-backfill.workflow";
@@ -16,10 +16,16 @@ import { createObservability } from "./observability";
 export const mastra = new Mastra({
   // assistantAgent is the SUPERVISOR (scheduling + calendar + bot control); it
   // delegates to minutesAgent (per-meeting minutes) and searchAgent (cross-
-  // meeting history). sreAgent is the SRE-copilot: it queries CasperAgent's OWN
-  // SigNoz telemetry to debug itself. Registering the sub-agents here surfaces
-  // them in the registry and their own traces/spans.
-  agents: { assistantAgent, minutesAgent, searchAgent, sreAgent },
+  // meeting history). sreAgent is the operator-only, read-only SRE copilot;
+  // sreAutomationAgent is internal-only and holds the narrowly scoped SigNoz
+  // create capabilities used by the health loop.
+  agents: {
+    assistantAgent,
+    minutesAgent,
+    searchAgent,
+    sreAgent,
+    sreAutomationAgent,
+  },
   workflows: {
     meetingReconcileWorkflow,
     meetingEnrichWorkflow,

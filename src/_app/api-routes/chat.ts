@@ -3,6 +3,7 @@ import { createUIMessageStreamResponse, jsonSchema, stepCountIs, tool } from "ai
 import type { JSONSchema7 } from "ai";
 import { NextResponse, after } from "next/server";
 import { getSession } from "@/features/auth/model/session";
+import { isOperator } from "@/shared/lib/operator";
 import { isBotOwner } from "@/server/recall/ownership";
 import { checkRateLimit, rateLimitedResponse } from "@/shared/lib/rate-limit";
 import { assertBodyWithinLimit } from "@/shared/lib/http";
@@ -147,6 +148,14 @@ export async function POST(req: Request) {
   )
     ? (requestedAgentId as (typeof AGENT_ALLOWLIST)[number])
     : "assistantAgent";
+
+  // The SRE agent sees deployment-wide telemetry. Authentication alone is not
+  // an authorization boundary: only explicitly configured operators may select
+  // it. Return 403 instead of silently falling back, so clients cannot mistake
+  // a denied operational request for a normal supervisor response.
+  if (agentId === "sreAgent" && !isOperator(session.user)) {
+    return NextResponse.json({ error: "operator_required" }, { status: 403 });
+  }
 
   // Meeting context: only inject if the caller actually OWNS the bot. An
   // unowned/forged meetingBotId is silently ignored — never surfaced to the

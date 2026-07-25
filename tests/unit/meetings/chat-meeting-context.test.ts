@@ -83,7 +83,9 @@ const userMsg = { role: "user", parts: [{ type: "text", text: "summarize this" }
 
 beforeEach(() => {
   vi.clearAllMocks();
-  getSession.mockResolvedValue({ user: { id: "u1" } });
+  delete process.env.OPERATOR_USER_IDS;
+  delete process.env.OPERATOR_EMAILS;
+  getSession.mockResolvedValue({ user: { id: "u1", email: "user@example.com" } });
   // handleChatStream returns a UIMessage ReadableStream — the route tee()s it
   // (client branch + detached server drain), so the mock must be a real
   // ReadableStream, not a bare object. An immediately-closing stream is enough.
@@ -156,6 +158,20 @@ describe("POST /api/chat — agent selection (allowlist)", () => {
       messages: [userMsg],
     });
     expect(agentIdPassedToHandler()).toBe("minutesAgent");
+  });
+
+  it("rejects sreAgent for an authenticated non-operator", async () => {
+    const res = await post({ agentId: "sreAgent", messages: [userMsg] });
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: "operator_required" });
+    expect(handleChatStream).not.toHaveBeenCalled();
+  });
+
+  it("routes to sreAgent for an explicitly allowlisted operator", async () => {
+    process.env.OPERATOR_USER_IDS = "u1";
+    const res = await post({ agentId: "sreAgent", messages: [userMsg] });
+    expect(res.status).toBe(200);
+    expect(agentIdPassedToHandler()).toBe("sreAgent");
   });
 
   it("falls back to assistantAgent for an unknown/forged agentId", async () => {
