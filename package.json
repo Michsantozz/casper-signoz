@@ -12,7 +12,7 @@
     "dev:inngest": "npx inngest-cli@latest dev -u http://localhost:3001/api/inngest",
     "build": "next build",
     "bundle:check": "node scripts/check-bundle-budget.mjs",
-    "verify:signoz": "tsx scripts/verify-signoz-health-query.ts",
+    "verify:signoz": "tsx --import ./scripts/_stub-server-only.mjs scripts/verify-signoz-health-query.ts",
     "start": "next start",
     "remotion:studio": "remotion studio",
     "remotion:render": "remotion render CasperDemo out/casper-demo.mp4",
@@ -213,6 +213,7 @@
     "postcss": "^8.5.15",
     "server-only": "^0.0.1",
     "tailwindcss": "^4.3.1",
+    "tsx": "4.22.4",
     "typescript": "^6.0.3",
     "vite-tsconfig-paths": "^6.1.1",
     "vitest": "^4.1.9"

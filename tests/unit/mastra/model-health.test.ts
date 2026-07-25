@@ -91,8 +91,17 @@ describe("SigNoz health query/parser", () => {
     const { buildSignozHealthQuery } = await load();
     const body = buildSignozHealthQuery("fireworks", 1_000_000);
 
-    expect(body.compositeQuery.queryType).toBe("builder");
+    // `schemaVersion` is required at the top level, and `compositeQuery` takes
+    // ONLY `queries`. The v4 leftovers `queryType`/`panelType` are rejected by
+    // the live API with HTTP 400 (`unknown field "queryType" in composite
+    // query`) — asserted here because that 400 shipped undetected: it made
+    // every health poll return a silent `null`.
+    expect(body.schemaVersion).toBe("v1");
+    expect(body.requestType).toBe("scalar");
+    expect(body.compositeQuery).not.toHaveProperty("queryType");
+    expect(body.compositeQuery).not.toHaveProperty("panelType");
     expect(body.compositeQuery).not.toHaveProperty("builderQueries");
+    expect(Object.keys(body.compositeQuery)).toEqual(["queries"]);
     expect(body.compositeQuery.queries.map((q) => q.spec.name)).toEqual([
       "A",
       "B",
@@ -129,6 +138,57 @@ describe("SigNoz health query/parser", () => {
     expect(pickSignozQueryValue(payload, "A")).toBe(12);
     expect(pickSignozQueryValue(payload, "B")).toBe(3);
     expect(pickSignozQueryValue(payload, "C")).toBe(45_000_000);
+  });
+
+  it("parses the REAL v5 scalar envelope captured from a live instance", async () => {
+    // NOT hand-written from the parser — this is the verbatim body a live
+    // SigNoz returned for the exact query buildSignozHealthQuery emits
+    // (`/api/v5/query_range`, requestType "scalar", 7d window over
+    // casper-assistant production model_generation spans). Every other fixture
+    // in this file was derived from the parser itself, so request and response
+    // agreed by construction and the real contract was never touched — which is
+    // how a permanently-broken health signal shipped.
+    //
+    // Three things this pins that the old parser got wrong:
+    //   1. results live at data.data.results, one level deeper than data.result
+    //   2. each query gets its OWN entry tagged with queryName (no collapsing)
+    //   3. entries come back OUT OF ORDER — B, C, A below — so no positional
+    //      indexing, and the column name is positional (`__result_0`) while the
+    //      query identity lives in the column's `queryName`
+    const { pickSignozQueryValue } = await load();
+    const column = (queryName: string) => ({
+      name: "__result_0",
+      signal: "",
+      fieldContext: "",
+      fieldDataType: "",
+      queryName,
+      aggregationIndex: 0,
+      meta: {},
+      columnType: "aggregation",
+    });
+    const live = {
+      status: "success",
+      data: {
+        type: "scalar",
+        meta: {
+          rowsScanned: 5318,
+          bytesScanned: 19_436_567,
+          durationMs: 91,
+          stepIntervals: { A: 400, B: 400, C: 400 },
+        },
+        data: {
+          results: [
+            { queryName: "B", columns: [column("B")], data: [[0]] },
+            { queryName: "C", columns: [column("C")], data: [[30_818_700_000]] },
+            { queryName: "A", columns: [column("A")], data: [[27]] },
+          ],
+        },
+      },
+    };
+
+    expect(pickSignozQueryValue(live, "A")).toBe(27);
+    expect(pickSignozQueryValue(live, "B")).toBe(0);
+    expect(pickSignozQueryValue(live, "C")).toBe(30_818_700_000);
   });
 
   it("parses the COLLAPSED table/scalar envelope (no per-entry queryName)", async () => {

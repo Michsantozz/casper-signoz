@@ -127,4 +127,13 @@ async function main() {
   }
 }
 
-await main();
+// NOT top-level await: package.json has no `"type": "module"`, so tsx/esbuild
+// transpiles this file to CJS, where top-level await is a hard parse error
+// ("Top-level await is currently not supported with the cjs output format").
+// Adding "type": "module" would fix it here and reinterpret every .js in the
+// repo — not a trade this script gets to make. `.catch` keeps the non-zero exit
+// that `fail()` relies on, and covers rejections `fail()` never sees.
+main().catch((error: unknown) => {
+  console.error(error instanceof Error ? error.stack : error);
+  process.exit(1);
+});

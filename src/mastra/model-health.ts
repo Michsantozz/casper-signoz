@@ -198,14 +198,24 @@ export function buildSignozHealthQuery(provider: Provider, now: number) {
   });
 
   return {
+    // Required by /api/v5/query_range. Without it the body is parsed against a
+    // different schema and the builder specs below are not understood.
+    schemaVersion: "v1",
     start,
     end: now,
+    // "scalar" collapses each query to a single aggregate over the window,
+    // which is exactly the shape this consumer wants (one number per query).
     requestType: "scalar",
     compositeQuery: {
-      queryType: "builder",
-      // "scalar" collapses each query to a single aggregate over the window,
-      // which is exactly the shape this consumer wants (one number per query).
-      panelType: "table",
+      // ONLY `queries` belongs here. The v4 dialect's `queryType: "builder"` and
+      // `panelType: "table"` are rejected outright — the API answers HTTP 400
+      // `unknown field "queryType" in composite query / Valid fields are:
+      // queries`. That 400 was live until `pnpm verify:signoz` was first able to
+      // run: every unit fixture for this builder was derived from the builder
+      // itself, so request and response agreed by construction and nothing ever
+      // touched the real contract. A rejected query surfaces as a silent `null`,
+      // i.e. the failover's cross-replica signal was permanently absent and the
+      // local circuit breaker was silently carrying every decision.
       queries: [
         // A = all model_generation calls for this provider in the window
         mk("A", "count()"),
@@ -234,6 +244,8 @@ function valueFromResultEntry(
 ): number | undefined {
   const row = entry as {
     value?: unknown;
+    columns?: Array<{ name?: string; queryName?: string }>;
+    data?: unknown;
     series?: Array<{ values?: Array<unknown> }>;
     table?: {
       rows?: Array<{ data?: Record<string, unknown> }>;
@@ -245,6 +257,29 @@ function valueFromResultEntry(
     }>;
   };
   if (!row || typeof row !== "object") return undefined;
+
+  // The shape /api/v5/query_range actually returns for `requestType: "scalar"`,
+  // captured from a live instance: `columns[]` describes the tuple layout and
+  // `data` is a matrix of rows. The column's `name` is POSITIONAL
+  // (`__result_0`) — the query it belongs to is in its `queryName`, so match on
+  // that first. Checking `name` too covers a table envelope that labels its
+  // columns by query name directly.
+  const columns = row.columns;
+  if (Array.isArray(columns) && Array.isArray(row.data)) {
+    const index = columns.findIndex(
+      (column) => column?.queryName === queryName || column?.name === queryName,
+    );
+    if (index >= 0) {
+      const lastRow = row.data.at(-1);
+      const cell = Array.isArray(lastRow)
+        ? lastRow[index]
+        : (lastRow as Record<string, unknown> | undefined)?.[
+            columns[index]?.name ?? queryName
+          ];
+      const fromMatrix = toFiniteNumber(cell);
+      if (fromMatrix !== undefined) return fromMatrix;
+    }
+  }
 
   const point = row.series?.[0]?.values?.slice(-1)?.[0];
   const fromPoint =
@@ -276,31 +311,55 @@ function valueFromResultEntry(
 // Extract a single numeric result value from SigNoz's (verbose, version-drifting)
 // query_range response. A parse miss = signal absent = fail-open, never a throw.
 //
-// TWO ENVELOPES, and the distinction is what previously broke this: for a
-// time-series/graph response `data.result` is a list of entries each tagged with
-// its own `queryName`; for a TABLE/SCALAR response — which is what this query
-// asks for — the queries collapse into a SINGLE entry whose rows carry A/B/C as
-// COLUMNS, with no per-entry `queryName` at all. The old implementation did
-// `result.find(r => r.queryName === name)` FIRST and returned undefined when it
-// missed, which made its own (correct) table-row fallback unreachable: every
-// lookup returned undefined, `total` fell to 0, and fetchSignozHealth's
-// `if (total <= 0) return null` reported "no traffic" forever. The SigNoz signal
-// was therefore permanently absent and indistinguishable from an idle window —
-// the local breaker silently carried every decision.
+// THE ENVELOPE, as captured from a live instance (v5, `requestType: "scalar"`)
+// — not as previously imagined here:
 //
-// So: try the tagged entry when one exists, then fall back to scanning EVERY
-// entry for a column named `queryName`. Both envelopes resolve.
+//   { status, data: { type: "scalar", meta: {…},
+//       data: { results: [ { queryName: "B",
+//                            columns: [{ name: "__result_0", queryName: "B",
+//                                        columnType: "aggregation" }],
+//                            data: [[0]] }, … ] } } }
+//
+// Three details, each of which broke an earlier assumption:
+//   1. Results live at `data.data.results` — one level deeper than the
+//      `data.result` this parser used to read, so EVERY lookup returned
+//      undefined.
+//   2. Queries do NOT collapse into one entry. Each gets its own entry, tagged
+//      with `queryName` — the previous comment asserted the opposite.
+//   3. Entries come back OUT OF ORDER (B before A above), so positional
+//      indexing into `results` is wrong; match on `queryName`.
+//
+// The consequence of (1) was invisible: `total` fell to 0, fetchSignozHealth's
+// `if (total <= 0) return null` reported "no traffic", and an absent signal is
+// indistinguishable from an idle window — so the local breaker silently carried
+// every decision. Nothing caught it because the unit fixtures were written from
+// this parser rather than from a response; `pnpm verify:signoz` is what finally
+// executed it against a real instance.
+//
+// Order of attempts: the tagged entry first, then a scan of every entry for a
+// column carrying `queryName`. The graph/table paths remain as fallbacks.
 export function pickSignozQueryValue(
   json: unknown,
   queryName: string,
 ): number | undefined {
   try {
     const payload = json as {
-      data?: { result?: unknown[]; results?: unknown[] };
+      data?: {
+        result?: unknown[];
+        results?: unknown[];
+        data?: { result?: unknown[]; results?: unknown[] };
+      };
       result?: unknown[];
     };
+    // The live envelope nests one level deeper than the older dialects:
+    // `data.data.results`, with `data.type`/`data.meta` as siblings of the inner
+    // `data`. The shallower paths stay as fallbacks for the graph/table shapes.
     const result =
-      payload?.data?.result ?? payload?.data?.results ?? payload?.result;
+      payload?.data?.data?.results ??
+      payload?.data?.data?.result ??
+      payload?.data?.result ??
+      payload?.data?.results ??
+      payload?.result;
     if (!Array.isArray(result)) return undefined;
 
     // Preferred: an entry explicitly tagged with this query name (graph shape).
