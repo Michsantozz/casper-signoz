@@ -23,6 +23,43 @@ observability isn't just visible; it changes what the system does.
 
 ---
 
+## 📋 Disclosures
+
+**What is prior work, and what was built for this hackathon.** The product under
+observation — the meeting assistant itself (recording, minutes, team dynamics,
+Screen Intelligence) — **pre-dates this hackathon**. It landed here as commit
+`2989fdd`, a single squashed import, which is why the git history starts on
+Jul 23 rather than showing years of it. Stating that plainly so nobody has to
+infer it from a commit graph.
+
+**The entire observability layer was built inside the hackathon window** (Jul 20–26,
+2026): 44 commits, `2989fdd..HEAD`, **109 files, ~15k insertions**, all dated
+Jul 23–25. That import carried exactly three SigNoz-touching files — `SIGNOZ.md`,
+`src/mastra/observability.ts`, and one test, i.e. a bare OTLP exporter hookup.
+Everything the tracks are judged on came after it:
+
+`llm-telemetry.ts` (self-instrumented traces + metrics + correlated logs) ·
+`sre.agent.ts` · `mcp-signoz.ts` · `model-health.ts` (telemetry-driven failover) ·
+`agent-health-watch.ts` · `agent-reliability-report.ts` · `signoz-import.ts` ·
+`verify-signoz-health-query.ts` · the 30-panel dashboard · 10 alert rules ·
+the trace funnel · the notification channel · the Foundry casting spec ·
+6 test files covering the above.
+
+Verify it directly:
+
+```bash
+git log --oneline 2989fdd..HEAD          # 44 commits, all Jul 23–25
+git diff --stat 2989fdd..HEAD            # 109 files, ~15k insertions
+git show --stat 2989fdd | tail -1        # the squashed import of the prior product
+```
+
+**AI assistants.** This project was built with AI coding assistance (Claude Code).
+It was used throughout: instrumentation code, dashboard/alert JSON, the import
+script, tests, and documentation. All of it was reviewed, run, and verified
+against a live SigNoz deployment by the author.
+
+---
+
 ## 🔭 Best Use of SigNoz — the pitch
 
 **One real agent. Every signal. A self-observing loop.** CasperAgent is instrumented **OpenTelemetry-native** — no proprietary SDK, the app just speaks standard OTLP (`http/protobuf`) and SigNoz is the sink. Everything below is **versioned as code** in [`deploy/signoz/`](deploy/signoz/) and reproducible.
@@ -104,8 +141,8 @@ Just ask: *"how did the team interact?"*, *"is anyone going quiet?"*, *"was ther
 - **Not one prompt — a supervised agent network.** A Casper supervisor routes per-meeting questions to a **Minutes** specialist and cross-meeting history/trends questions to a **Search** specialist, each with its own scoped toolset.
 - **Remembers you.** A durable per-user profile (timezone, default duration, recording prefs) persists across every conversation, plus **semantic recall** over past chats (Fireworks embeddings → pgvector) — not a rolling last-N window.
 - **Real product, not a demo.** Live deployment, multi-tenant by construction (Postgres RLS + ownership checks), Svix-signed fail-closed webhooks, and bounded app-level retries backed by **two independent recovery crons** (reconcile stuck rows + backfill missing ones).
-- **Fireworks, used *intelligently* — not just called.** Every layer sends the model only what it can't compute for free. Team-dynamics metrics are pure timestamp math (talk-time, interruptions, silences) — **zero tokens**; Fireworks is spent on *one* insight call over the numbers, not on re-deriving them. Screen Intelligence pre-filters a whole recording down to ~12 high-signal frames deterministically, so the vision model reads a handful of screens instead of the video. Semantic recall embeds once per message and reuses it. The philosophy: **cheap deterministic work first, Fireworks only where judgment is genuinely needed** — the same token-efficient routing discipline the hackathon rewards, applied across the whole product.
-- **Runs on AMD.** Chat, vision, embeddings, and the meeting-health insight all default to **Fireworks AI** (AMD hardware) — one key, one provider, swappable model via `FIREWORKS_MODEL_ID`.
+- **A cost signal worth graphing.** Every layer sends the model only what it can't compute for free: team-dynamics metrics are pure timestamp math — **zero tokens**; one insight call runs over the numbers instead of re-deriving them; Screen Intelligence pre-filters a whole recording to ~12 high-signal frames before any vision call. That discipline is *why* the cost panels are interesting — `gen_ai.usage.cost` tracks a workload that was deliberately shaped, so a spike in the dashboard means something changed, not that the app is uniformly wasteful.
+- **Two providers, priced separately — because failover reprices the traffic.** Fireworks AI is primary (chat, vision, embeddings, insight), AWS Bedrock is the fallback. Per-provider price overrides (`LLM_PRICE_*__amazon_bedrock`) exist for a reason: when the telemetry-driven failover reroutes a turn mid-incident, a single global price would emit `gen_ai.usage.cost` **wrong** exactly when the cost panels matter most.
 
 ---
 
@@ -116,7 +153,7 @@ Just ask: *"how did the team interact?"*, *"is anyone going quiet?"*, *"was ther
 | App | Next.js 16, React 19 (App Router + RSC) |
 | **Observability** | **OpenTelemetry-native → SigNoz** (traces · metrics · logs · dashboards · alerts · trace funnel · MCP) |
 | Agent | Mastra (agents, tools, workflows) |
-| LLM | **Fireworks AI** (default — chat, **vision**, embeddings, insight; on AMD) · AWS Bedrock fallback |
+| LLM | **Fireworks AI** (default — chat, **vision**, embeddings, insight) · AWS Bedrock fallback (telemetry-driven) |
 | Team dynamics | Deterministic timestamp analysis + Fireworks insight + browser audio (WebCodecs) |
 | Screen Intelligence | Deterministic frame pre-filter (zero LLM) → Fireworks vision, ≤12 frames/call |
 | Meetings | Recall.ai (REST + MCP), Google Calendar OAuth |
