@@ -182,4 +182,55 @@ describe("versioned SigNoz assets", () => {
       ).toBe(true);
     }
   });
+
+  it("keeps the trace funnel ordered, scoped, and aimed at the product agent", () => {
+    // SigNoz funnel steps match by exact `service_name` + `span_name`; the
+    // per-step attribute filter is only a refinement (verified on v0.134 — see
+    // deploy/signoz/funnels/README.md). Mastra names spans `<operation>
+    // <entityName>`, so each step's span_name must open with the operation its
+    // own mastra.span.type filter claims, or the step silently never matches
+    // and the funnel reads as 100% drop-off. Also pin the entity: an earlier
+    // version aimed at the SRE copilot, which no user traffic hits.
+    const funnel = readJson(
+      join(process.cwd(), "deploy/signoz/funnels/agent-pipeline-funnel.json"),
+    ) as {
+      steps?: {
+        step_order?: number;
+        service_name?: string;
+        span_name?: string;
+        filters?: { items?: { key?: { key?: string }; value?: unknown }[] };
+      }[];
+    };
+    const steps = funnel.steps ?? [];
+    expect(steps.length).toBeGreaterThanOrEqual(2);
+
+    const operationBySpanType: Record<string, string> = {
+      agent_run: "invoke_agent",
+      tool_call: "execute_tool",
+      model_inference: "model_inference",
+    };
+
+    steps.forEach((step, index) => {
+      // Contiguous 1..N — SigNoz evaluates steps in temporal order and a gap
+      // or duplicate order silently reshapes the funnel.
+      expect(step.step_order, `step ${index}`).toBe(index + 1);
+      expect(step.service_name, `step ${index}`).toBe("casper-assistant");
+
+      const spanType = step.filters?.items?.find(
+        (item) => item.key?.key === "mastra.span.type",
+      )?.value;
+      expect(spanType, `step ${index} must filter on mastra.span.type`).toBeDefined();
+      const operation = operationBySpanType[String(spanType)];
+      expect(operation, `step ${index}: unknown span type ${String(spanType)}`).toBeDefined();
+      expect(
+        step.span_name?.startsWith(`${operation} `),
+        `step ${index}: span_name "${step.span_name}" does not match its own filter (${String(spanType)} → "${operation} …")`,
+      ).toBe(true);
+    });
+
+    // First and last steps are the agent itself; they must name the PRODUCT
+    // agent so the funnel measures real user traffic, not self-observability.
+    expect(steps[0]!.span_name).toBe("invoke_agent Casper Assistant");
+    expect(steps.at(-1)!.span_name).toBe("model_inference Casper Assistant");
+  });
 });
