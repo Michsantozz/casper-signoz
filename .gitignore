@@ -33,6 +33,16 @@ next-env.d.ts
 /.firecrawl
 /CASPER_SDK.md
 
+# Material de apresentação do vídeo demo (roteiro, narração, render). Não é
+# código do projeto.
+/demo
+
+# As composições Remotion que geraram o vídeo de submissão. Ficam no disco para
+# poder rebuildar, mas fora do repo: é material de apresentação, não runtime do
+# produto — nada em src/ importa daqui, e os assets que elas carregam vivem em
+# zdocs/video-production/ (também ignorado). Ver o README de lá para rebuildar.
+/src/remotion
+
 # Ferramentas locais do Claude Code (skills, settings) — não são código do projeto.
 /.claude
 /.agents
