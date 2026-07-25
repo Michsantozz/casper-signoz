@@ -4,12 +4,13 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
  * The autonomous agent-health watch — core logic (server/observability/
  * agent-health-watch.ts) + its cron step + its manual trigger route.
  *
- * runAgentHealthWatch drives the sreAgent with a "watch yourself" prompt and
+ * runAgentHealthWatch drives the internal sreAutomationAgent with a "watch
+ * yourself" prompt and
  * fans the summary out as an operator notification. Contract we lock in:
  *  - agent not registered → { ran:false }, NO notifications (fail-safe no-op);
  *  - empty agent output → a fallback summary string, never an empty bell;
  *  - notify:false → returns the summary but fans out to NOBODY (dry demo run);
- *  - notify (default) → one notification PER user, type agent_health_alert,
+ *  - notify (default) → one notification per configured operator,
  *    message truncated to 500 chars (it's a bell-icon blurb, not a report);
  *  - the summary is trimmed.
  *
@@ -23,7 +24,7 @@ const generate = vi.fn();
 const createNotificationsForUsers = vi.fn();
 
 // db.select(...).from(user) → resolves the operator rows. Chainable thenable.
-const userRows: { id: string }[] = [];
+const userRows: { id: string; email: string }[] = [];
 vi.mock("@/shared/db", () => ({
   db: {
     select: () => ({ from: () => Promise.resolve(userRows) }),
@@ -51,19 +52,24 @@ beforeEach(() => {
   generate.mockReset();
   createNotificationsForUsers.mockReset();
   userRows.length = 0;
+  process.env.OPERATOR_USER_IDS = "u1,u2";
+  delete process.env.OPERATOR_EMAILS;
   // Default: agent present, two operators, a normal summary.
   getAgentById.mockReturnValue({ generate });
   generate.mockResolvedValue({ text: "All healthy. No alert needed." });
-  userRows.push({ id: "u1" }, { id: "u2" });
+  userRows.push(
+    { id: "u1", email: "u1@example.com" },
+    { id: "u2", email: "u2@example.com" },
+  );
 });
 
 describe("runAgentHealthWatch — no-op paths", () => {
-  it("returns ran:false and notifies nobody when sreAgent is not registered", async () => {
+  it("returns ran:false when the automation agent is not registered", async () => {
     getAgentById.mockReturnValue(undefined);
     const out = await run();
     expect(out).toEqual({
       ran: false,
-      summary: "sreAgent not registered",
+      summary: "sreAutomationAgent not registered",
       notified: 0,
     });
     expect(createNotificationsForUsers).not.toHaveBeenCalled();
@@ -89,6 +95,11 @@ describe("runAgentHealthWatch — notify:false (dry run)", () => {
     const out = await run({ notify: false });
     expect(out).toEqual({ ran: true, summary: "cost is flat", notified: 0 });
     expect(createNotificationsForUsers).not.toHaveBeenCalled();
+    expect(getAgentById).toHaveBeenCalledWith("sreAutomationAgent");
+    expect(generate).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ abortSignal: expect.any(AbortSignal) }),
+    );
   });
 });
 
@@ -120,7 +131,7 @@ describe("runAgentHealthWatch — fan-out", () => {
   });
 
   it("reports notified:0 when there are no operators, but still ran", async () => {
-    userRows.length = 0;
+    process.env.OPERATOR_USER_IDS = "someone-else";
     const out = await run();
     expect(out.ran).toBe(true);
     expect(out.notified).toBe(0);
@@ -159,8 +170,18 @@ describe("runAgentHealthWatch — failure containment", () => {
 
   it("times out a hung agent run instead of holding the cron slot forever", async () => {
     vi.useFakeTimers();
-    // Never settles — the exact failure mode concurrency:1 turns into an outage.
-    generate.mockReturnValue(new Promise(() => {}));
+    let receivedSignal: AbortSignal | undefined;
+    generate.mockImplementation(
+      (_prompt: string, options?: { abortSignal?: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          receivedSignal = options?.abortSignal;
+          receivedSignal?.addEventListener(
+            "abort",
+            () => reject(receivedSignal?.reason),
+            { once: true },
+          );
+        }),
+    );
     const pending = run({ notify: false });
     await vi.advanceTimersByTimeAsync(5 * 60_000 + 1);
     const out = await pending;
@@ -168,5 +189,9 @@ describe("runAgentHealthWatch — failure containment", () => {
 
     expect(out.ran).toBe(false);
     expect(out.summary).toContain("WatchTimeoutError");
+    expect(receivedSignal?.aborted).toBe(true);
+    expect(receivedSignal?.reason).toMatchObject({
+      name: "WatchTimeoutError",
+    });
   });
 });

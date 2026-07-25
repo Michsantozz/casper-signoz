@@ -4,10 +4,10 @@ import { createWorkflow, createStep } from "@/inngest/client";
 /**
  * Autonomous agent-health watch — the self-observing loop as a cron.
  *
- * Every 15 min this drives the sreAgent to inspect CasperAgent's OWN SigNoz
- * telemetry and, where a real problem stands out, provision a SigNoz alert for
- * it (idempotently) — then notify the operator with a short summary. No human
- * asks; the agent watches and repairs its own instrumentation on a schedule.
+ * Every 15 min this drives the internal sreAutomationAgent to inspect
+ * CasperAgent's OWN SigNoz telemetry and, where a real problem stands out,
+ * provision a SigNoz alert for it (idempotently) — then notify explicitly
+ * configured operators with a short summary.
  * See src/server/observability/agent-health-watch.ts for the logic.
  *
  * 15 min: frequent enough to catch a regression within the hour it queries,

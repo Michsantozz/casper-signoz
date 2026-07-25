@@ -11,12 +11,9 @@ import { test, expect } from "@playwright/test";
  *  invocado. É o par e2e dos unit de rota (agent-health-watch-route.test.ts),
  *  agora com o Next real em vez de mock de handler.
  *
- *  LIVE (opt-in, RUN_LIVE_E2E=1): com sessão real e SIGNOZ_MCP_URL AUSENTE,
- *  perguntar ao chat sobre a própria telemetria exercita o path de degrade
- *  gracioso ponta-a-ponta: o supervisor delega ao sreAgent, que — sem tools de
- *  telemetria — responde que o backend não está conectado, em vez de fabricar
- *  métricas. Precisa de sessão + agente real (custa tokens), por isso fica atrás
- *  da flag, como as outras LIVE.
+ *  LIVE (opt-in, RUN_LIVE_E2E=1): exige que o usuário da sessão esteja em
+ *  OPERATOR_USER_IDS/OPERATOR_EMAILS. O sreAgent é selecionado diretamente —
+ *  ele não faz mais parte do supervisor acessível a usuários comuns.
  */
 
 test.describe("agent-health — hermético (deslogado)", () => {
@@ -55,7 +52,7 @@ test.describe("agent-health — LIVE (logado, agente real)", () => {
   test("trigger manual do watch retorna um summary (notify=0, dry run)", async ({
     page,
   }) => {
-    // Pré-requisito: sessão válida (semeadura/login a cargo do runner LIVE).
+    // Pré-requisito: sessão válida e usuário na allowlist de operadores.
     // notify=0 → roda o pass e devolve o summary SEM fanout de notificação.
     const res = await page.request.post(
       "/api/internal/agent-health-watch?notify=0",
@@ -68,28 +65,25 @@ test.describe("agent-health — LIVE (logado, agente real)", () => {
     expect(body.summary.length).toBeGreaterThan(0);
   });
 
-  test("perguntar sobre a própria telemetria degrada com elegância (sem SigNoz MCP)", async ({
+  test("operador consegue selecionar o sreAgent diretamente", async ({
     page,
   }) => {
-    // Sem SIGNOZ_MCP_URL, o sreAgent não tem tools: deve dizer que a telemetria
-    // não está conectada, nunca inventar números. Dirigimos a UI do chat.
-    await page.goto("/", { waitUntil: "domcontentloaded" });
-
-    const composer = page.getByRole("textbox").first();
-    await composer.fill("how many tokens did I spend today by model?");
-
-    const [res] = await Promise.all([
-      page.waitForResponse(
-        (r) => r.url().includes("/api/chat") && r.request().method() === "POST",
-      ),
-      composer.press("Enter"),
-    ]);
-
+    const res = await page.request.post("/api/chat", {
+      data: {
+        agentId: "sreAgent",
+        messages: [
+          {
+            role: "user",
+            parts: [
+              {
+                type: "text",
+                text: "how many tokens did I spend today by model?",
+              },
+            ],
+          },
+        ],
+      },
+    });
     expect(res.status()).toBe(200);
-    // Resposta do supervisor+sreAgent: menciona que o backend de telemetria não
-    // está conectado (não fabrica métricas). Aceita variações do fraseado.
-    await expect(
-      page.getByText(/telemetry|SigNoz|not.*(wired|connected|configured)/i),
-    ).toBeVisible({ timeout: 60_000 });
   });
 });

@@ -2,11 +2,13 @@ import "server-only";
 import { db } from "@/shared/db";
 import { user } from "@/shared/db/auth-schema";
 import { createNotificationsForUsers } from "@/server/notifications";
+import { isOperator } from "@/shared/lib/operator";
 
 /**
  * Autonomous agent-health watch — the self-observing loop, no human in it.
  *
- * On a schedule (see agent-health-watch.workflow.ts) this drives the sreAgent
+ * On a schedule (see agent-health-watch.workflow.ts) this drives the internal
+ * sreAutomationAgent
  * with a "watch yourself" prompt. The agent queries CasperAgent's OWN SigNoz
  * telemetry (error rate, failing tools, latency/cost), decides whether anything
  * warrants an alert, and — being told to act autonomously — provisions a SigNoz
@@ -25,9 +27,12 @@ import { createNotificationsForUsers } from "@/server/notifications";
 const WATCH_PROMPT = `AUTONOMOUS HEALTH CHECK. You are running on a schedule, with no human in the loop, to watch CasperAgent's own health from its SigNoz telemetry.
 
 Do this:
-1. Look at the last 1 hour of telemetry: LLM error rate, the most-failing tool (mastra.span.type = 'tool_call' with error.type), p95 latency of model_generation spans, and total LLM cost.
+1. Look at the last 1 hour of production telemetry: LLM error rate, the most-failing tool (mastra.span.type = 'tool_call' with error.type), p95 latency of model_generation spans, and total LLM cost. Apply every mandatory service/environment/de-duplication filter from your instructions.
 2. Decide if anything is genuinely wrong — a tool failing repeatedly, an error rate that stands out, latency or cost clearly elevated. Use judgment; a couple of stray errors is not an incident.
-3. If something warrants it, PROVISION a SigNoz alert for it (you are authorized to act autonomously): first list existing alert rules and DON'T duplicate one; only create if none covers it. Base the threshold on what you actually observed.
+3. If something warrants it, PROVISION a SigNoz alert for it (you are authorized to act autonomously). Base the threshold on what you actually observed.
+   - Name the alert after the SYMPTOM, not the moment: a stable, descriptive name another run would arrive at independently for the same problem ("tool call failures list_calendar_events", not "elevated failures 14:32"). Uniqueness is enforced in code — the create tool derives a canonical key from the name, refuses a duplicate, and tells you if one already existed. So a stable name is what makes deduplication work across runs; a creatively reworded one defeats it.
+   - If the tool reports the alert was deduplicated, that is a SUCCESS, not a failure: the coverage already exists. Say so and don't retry under a different name.
+   - You can create but you CANNOT update, delete, or mute. Every rule you create is permanent from your side, so create only when the problem is real.
 4. Reply with a SHORT operator summary (2-4 sentences): the health snapshot, and whether you created an alert (name it) or found nothing actionable. This summary goes straight to an operator notification — write it for a human skimming a bell icon.
 
 If the telemetry backend isn't available (no tools), say exactly that in one sentence.`;
@@ -79,10 +84,21 @@ async function emitWatchFailureSpan(args: {
   span.end();
 }
 
-function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
+function withTimeout<T>(
+  start: (signal: AbortSignal) => Promise<T>,
+  ms: number,
+): Promise<T> {
+  const controller = new AbortController();
   return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new WatchTimeoutError(ms)), ms);
-    work.then(
+    const timer = setTimeout(() => {
+      const error = new WatchTimeoutError(ms);
+      // Mastra propagates this signal through generation, delegated agents, and
+      // tool executions. Aborting before rejecting prevents a timed-out health
+      // pass from creating an alert after the caller has already marked it failed.
+      controller.abort(error);
+      reject(error);
+    }, ms);
+    start(controller.signal).then(
       (value) => {
         clearTimeout(timer);
         resolve(value);
@@ -108,9 +124,13 @@ export async function runAgentHealthWatch(opts?: {
   // Lazy import to avoid a static server → mastra → server import cycle
   // (mastra/index pulls in server modules). Same pattern as enrich.ts.
   const { mastra } = await import("@/mastra");
-  const agent = mastra.getAgentById("sreAgent");
+  const agent = mastra.getAgentById("sreAutomationAgent");
   if (!agent) {
-    return { ran: false, summary: "sreAgent not registered", notified: 0 };
+    return {
+      ran: false,
+      summary: "sreAutomationAgent not registered",
+      notified: 0,
+    };
   }
 
   // The watcher itself must never crash the tick. An unhandled throw here fails
@@ -123,7 +143,7 @@ export async function runAgentHealthWatch(opts?: {
   const started = Date.now();
   try {
     const res = await withTimeout(
-      agent.generate(WATCH_PROMPT),
+      (abortSignal) => agent.generate(WATCH_PROMPT, { abortSignal }),
       WATCH_TIMEOUT_MS,
     );
     summary = (res?.text ?? "").trim() || "Health check produced no output.";
@@ -159,8 +179,8 @@ export async function runAgentHealthWatch(opts?: {
 
   // Operational signal → surface to every operator (no per-user scope: this is
   // about the agent stack itself, not one tenant's data).
-  const rows = await db.select({ id: user.id }).from(user);
-  const userIds = rows.map((r) => r.id);
+  const rows = await db.select({ id: user.id, email: user.email }).from(user);
+  const userIds = rows.filter(isOperator).map((r) => r.id);
   await createNotificationsForUsers({
     userIds,
     type: "agent_health_alert",

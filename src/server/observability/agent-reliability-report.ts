@@ -2,6 +2,7 @@ import "server-only";
 import { db } from "@/shared/db";
 import { user } from "@/shared/db/auth-schema";
 import { createNotificationsForUsers } from "@/server/notifications";
+import { isOperator } from "@/shared/lib/operator";
 
 /**
  * Autonomous weekly reliability report — the fleet-health digest, no human in it.
@@ -26,7 +27,7 @@ const REPORT_PROMPT = `WEEKLY RELIABILITY REPORT. You are running on a schedule,
 
 Follow the RELIABILITY REPORT procedure from your instructions:
 1. Compare the current 7 days against the prior 7 days (state both windows).
-2. Per model (model_generation spans) and per tool (tool_call spans), aggregate error rate and p95/p99 latency in each window.
+2. Per model (model_generation spans) and per tool (tool_call spans), aggregate error rate and p95/p99 latency in each window. Apply every mandatory service/environment/de-duplication filter from your instructions in EVERY window — a filter applied to only one window manufactures a regression out of nothing.
 3. Rank by regression (current − prior). Lead with the single worst regression — the model/tool whose error rate or p95 climbed the most — with both numbers and the delta. Then one line on what improved or held steady.
 4. If the prior window is empty, say so and give the current snapshot only — don't invent a delta.
 
@@ -56,10 +57,18 @@ class ReportTimeoutError extends Error {
   }
 }
 
-function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
+function withTimeout<T>(
+  start: (signal: AbortSignal) => Promise<T>,
+  ms: number,
+): Promise<T> {
+  const controller = new AbortController();
   return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new ReportTimeoutError(ms)), ms);
-    work.then(
+    const timer = setTimeout(() => {
+      const error = new ReportTimeoutError(ms);
+      controller.abort(error);
+      reject(error);
+    }, ms);
+    start(controller.signal).then(
       (value) => {
         clearTimeout(timer);
         resolve(value);
@@ -127,7 +136,7 @@ export async function runAgentReliabilityReport(opts?: {
   const started = Date.now();
   try {
     const res = await withTimeout(
-      agent.generate(REPORT_PROMPT),
+      (abortSignal) => agent.generate(REPORT_PROMPT, { abortSignal }),
       REPORT_TIMEOUT_MS,
     );
     summary =
@@ -164,8 +173,8 @@ export async function runAgentReliabilityReport(opts?: {
 
   // Fleet-health digest → surface to every operator (no per-user scope: this is
   // about the agent stack itself, not one tenant's data).
-  const rows = await db.select({ id: user.id }).from(user);
-  const userIds = rows.map((r) => r.id);
+  const rows = await db.select({ id: user.id, email: user.email }).from(user);
+  const userIds = rows.filter(isOperator).map((r) => r.id);
   await createNotificationsForUsers({
     userIds,
     type: "agent_reliability_report",

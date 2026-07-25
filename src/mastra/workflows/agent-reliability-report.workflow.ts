@@ -4,9 +4,10 @@ import { createWorkflow, createStep } from "@/inngest/client";
 /**
  * Autonomous weekly reliability report — the fleet-health trend as a cron.
  *
- * Every Monday 09:00 this drives the sreAgent to compare CasperAgent's OWN
- * SigNoz telemetry week-over-week (error rate + latency per model/tool), rank
- * the regressions, and notify the operator with a short digest. The self-host
+ * Every Monday 09:00 this drives the read-only sreAgent to compare
+ * CasperAgent's OWN SigNoz telemetry week-over-week (error rate + latency per
+ * model/tool), rank the regressions, and notify configured operators with a
+ * short digest. The self-host
  * counterpart to SigNoz Cloud's "Noz" service-reliability report — driven by our
  * agent over the MCP instead of a cloud-only UI. See
  * src/server/observability/agent-reliability-report.ts for the logic.
